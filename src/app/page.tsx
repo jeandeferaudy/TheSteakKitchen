@@ -254,6 +254,8 @@ export default function Page() {
   // Session + layout refs
   // ----------------------------
   const sessionIdRef = React.useRef<string>("");
+  const preserveNextShopScrollRef = React.useRef<boolean>(false);
+  const restoreNextShopScrollTopRef = React.useRef<number | null>(null);
 
   const headerRef = React.useRef<HTMLDivElement | null>(null);
   const navRef = React.useRef<HTMLDivElement | null>(null);
@@ -261,6 +263,7 @@ export default function Page() {
 
   const [topOffset, setTopOffset] = React.useState<number>(0);
   const [isMobileViewport, setIsMobileViewport] = React.useState<boolean>(false);
+  const [mobileLogoCollapsed, setMobileLogoCollapsed] = React.useState<boolean>(false);
 
   // remember list scroll position for "back to where I was"
   const listScrollTopRef = React.useRef<number>(0);
@@ -478,8 +481,20 @@ export default function Page() {
     if (typeof window === "undefined") return "/shop";
     return `${window.location.pathname}${window.location.search}`;
   }, []);
+  const replaceCurrentRouteState = React.useCallback((patch: Record<string, unknown>) => {
+    if (typeof window === "undefined") return;
+    const current = `${window.location.pathname}${window.location.search}`;
+    const prev =
+      window.history.state && typeof window.history.state === "object"
+        ? window.history.state
+        : {};
+    window.history.replaceState({ ...prev, ...patch }, "", current);
+  }, []);
   const pushAppRoute = React.useCallback(
-    (next: string, opts?: { rememberCurrent?: boolean; replace?: boolean }) => {
+    (
+      next: string,
+      opts?: { rememberCurrent?: boolean; replace?: boolean; state?: Record<string, unknown> }
+    ) => {
       if (typeof window === "undefined") return;
       const current = `${window.location.pathname}${window.location.search}`;
       if (current === next) return;
@@ -492,10 +507,11 @@ export default function Page() {
           }
         }
       }
+      const nextState = opts?.state ?? {};
       if (opts?.replace) {
-        window.history.replaceState({}, "", next);
+        window.history.replaceState(nextState, "", next);
       } else {
-        window.history.pushState({}, "", next);
+        window.history.pushState(nextState, "", next);
       }
     },
     []
@@ -545,6 +561,12 @@ export default function Page() {
   React.useEffect(() => {
     if (!isMobileViewport) setMobileFiltersOpen(false);
   }, [isMobileViewport]);
+
+  React.useEffect(() => {
+    if (!isMobileViewport || panel !== null || mobileFiltersOpen) {
+      setMobileLogoCollapsed(false);
+    }
+  }, [isMobileViewport, mobileFiltersOpen, panel]);
 
   React.useEffect(() => {
     document.documentElement.setAttribute("data-tp-mode", "dark");
@@ -1733,10 +1755,45 @@ React.useEffect(() => {
   const scrollToProducts = React.useCallback(() => {
     setAdminAllProductsMode(false);
     closePrimaryDrawers();
+    setMobileLogoCollapsed(false);
     const el = listScrollRef.current;
     if (!el) return;
     el.scrollTo({ top: 0, behavior: "smooth" });
   }, [closePrimaryDrawers]);
+
+  React.useEffect(() => {
+    const el = listScrollRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      const nextTop = el.scrollTop ?? 0;
+      listScrollTopRef.current = nextTop;
+      if (!isMobileViewport || panel !== null || mobileFiltersOpen) return;
+      setMobileLogoCollapsed((prev) => {
+        if (nextTop <= 2) return false;
+        if (nextTop > 12) return true;
+        return prev;
+      });
+    };
+
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [isMobileViewport, mobileFiltersOpen, panel]);
+
+  React.useLayoutEffect(() => {
+    if (isPrimaryDrawerOpen) return;
+    const restoreTop = restoreNextShopScrollTopRef.current;
+    if (restoreTop == null) return;
+    const el = listScrollRef.current;
+    if (el) {
+      el.scrollTop = restoreTop;
+    }
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: windowScrollTopRef.current, left: 0, behavior: "auto" });
+    }
+    restoreNextShopScrollTopRef.current = null;
+  }, [isPrimaryDrawerOpen, products.length, resolvedGridView]);
 
   const logout = React.useCallback(async () => {
     await supabase.auth.signOut();
@@ -1810,6 +1867,7 @@ React.useEffect(() => {
     windowScrollTopRef.current =
       typeof window !== "undefined" ? window.scrollY || window.pageYOffset || 0 : 0;
     listScrollTopRef.current = listScrollRef.current?.scrollTop ?? 0;
+    replaceCurrentRouteState({ shopScrollTop: listScrollTopRef.current });
     setSelectedId(id);
     setDetailsOpen(false);
     setOrdersOpen(false);
@@ -1823,7 +1881,7 @@ React.useEffect(() => {
       const params = new URLSearchParams({ id: String(id) });
       window.history.pushState({}, "", `/shop/product?${params.toString()}`);
     }
-  }, []);
+  }, [replaceCurrentRouteState]);
 
   const openEditProduct = React.useCallback(
     (id: string, opts?: { skipNavigate?: boolean }) => {
@@ -1831,6 +1889,7 @@ React.useEffect(() => {
       windowScrollTopRef.current =
         typeof window !== "undefined" ? window.scrollY || window.pageYOffset || 0 : 0;
       listScrollTopRef.current = listScrollRef.current?.scrollTop ?? 0;
+      replaceCurrentRouteState({ shopScrollTop: listScrollTopRef.current });
       setEditorReturnToProduct(panel === "product");
       setSelectedId(id);
       setDetailsOpen(false);
@@ -1846,7 +1905,7 @@ React.useEffect(() => {
         window.history.pushState({}, "", `/shop/product/edit?${params.toString()}`);
       }
     },
-    [isAdmin, panel]
+    [isAdmin, panel, replaceCurrentRouteState]
   );
 
   const createProduct = React.useCallback(async () => {
@@ -1933,15 +1992,11 @@ React.useEffect(() => {
   );
 
   const backToList = React.useCallback(() => {
+    const shopScrollTop = listScrollTopRef.current;
+    preserveNextShopScrollRef.current = true;
+    restoreNextShopScrollTopRef.current = shopScrollTop;
     closePrimaryDrawers();
-    requestAnimationFrame(() => {
-      const el = listScrollRef.current;
-      if (el) el.scrollTop = listScrollTopRef.current;
-      if (typeof window !== "undefined") {
-        window.scrollTo({ top: windowScrollTopRef.current, left: 0, behavior: "auto" });
-      }
-    });
-    pushAppRoute("/shop");
+    pushAppRoute("/shop", { state: { shopScrollTop } });
   }, [closePrimaryDrawers, pushAppRoute]);
 
   const openCheckout = React.useCallback(async (opts?: { skipNavigate?: boolean }) => {
@@ -3223,18 +3278,25 @@ React.useEffect(() => {
     }
   }, [resolveRouteWithoutCart]);
 
-  const openShop = React.useCallback((opts?: { skipNavigate?: boolean }) => {
+  const openShop = React.useCallback((opts?: { skipNavigate?: boolean; preserveScroll?: boolean }) => {
     closePrimaryDrawers();
     setCartOpen(false);
     setAdminAllProductsMode(false);
-    scrollToProducts();
+    const shouldPreserveScroll = opts?.preserveScroll || preserveNextShopScrollRef.current;
+    preserveNextShopScrollRef.current = false;
+    if (!shouldPreserveScroll) {
+      scrollToProducts();
+      restoreNextShopScrollTopRef.current = null;
+    } else if (restoreNextShopScrollTopRef.current == null) {
+      restoreNextShopScrollTopRef.current = listScrollTopRef.current;
+    }
     if (!opts?.skipNavigate) {
       pushAppRoute("/shop");
     }
   }, [closePrimaryDrawers, pushAppRoute, scrollToProducts]);
 
   const applyRouteFromLocation = React.useCallback(
-    (rawPath: string, rawSearch: string) => {
+    (rawPath: string, rawSearch: string, routeState?: Record<string, unknown> | null) => {
       if (isApplyingRouteRef.current) return;
       isApplyingRouteRef.current = true;
       try {
@@ -3278,7 +3340,15 @@ React.useEffect(() => {
         };
 
         if (path === "/" || path === "/shop") {
-          openShop({ skipNavigate: true });
+          const stateScrollTop =
+            routeState && typeof routeState.shopScrollTop === "number"
+              ? routeState.shopScrollTop
+              : null;
+          if (stateScrollTop != null) {
+            preserveNextShopScrollRef.current = true;
+            restoreNextShopScrollTopRef.current = stateScrollTop;
+          }
+          openShop({ skipNavigate: true, preserveScroll: stateScrollTop != null });
           return;
         }
         if (path === "/shop/product") {
@@ -3441,7 +3511,13 @@ React.useEffect(() => {
   React.useEffect(() => {
     if (typeof window === "undefined") return;
     const onPopState = () => {
-      applyRouteFromLocation(window.location.pathname, window.location.search);
+      applyRouteFromLocation(
+        window.location.pathname,
+        window.location.search,
+        window.history.state && typeof window.history.state === "object"
+          ? window.history.state
+          : null
+      );
     };
     onPopState();
     window.addEventListener("popstate", onPopState);
@@ -3452,7 +3528,7 @@ React.useEffect(() => {
     if (!authReady || !pendingRouteRef.current) return;
     const next = pendingRouteRef.current;
     pendingRouteRef.current = null;
-    applyRouteFromLocation(next.path, next.search);
+    applyRouteFromLocation(next.path, next.search, null);
   }, [applyRouteFromLocation, authReady, authUserId, isAdmin]);
 
   const goBackDrawer = React.useCallback(
@@ -3469,7 +3545,13 @@ React.useEffect(() => {
       }
       pushAppRoute(next, { rememberCurrent: false });
       const url = new URL(next, window.location.origin);
-      applyRouteFromLocation(url.pathname, url.search);
+      applyRouteFromLocation(
+        url.pathname,
+        url.search,
+        window.history.state && typeof window.history.state === "object"
+          ? window.history.state
+          : null
+      );
     },
     [applyRouteFromLocation, getCurrentRoute, pushAppRoute]
   );
@@ -4173,11 +4255,29 @@ React.useEffect(() => {
       >
       {/* Header */}
       {!hideMobileChromeForFullDrawer ? (
-      <div ref={headerRef} style={{ ...styles.headerWrap, ...headerZoneStyle }}>
+      <div
+        ref={headerRef}
+        style={{
+          ...styles.headerWrap,
+          ...headerZoneStyle,
+          ...(isMobileViewport
+            ? {
+                maxHeight: mobileLogoCollapsed ? 0 : mobileLogoHeight,
+                opacity: mobileLogoCollapsed ? 0 : 1,
+              }
+            : null),
+        }}
+      >
         <div
           style={{
             ...styles.headerInner,
-            ...(isMobileViewport ? { minHeight: mobileLogoHeight } : null),
+            ...(isMobileViewport
+              ? {
+                  minHeight: mobileLogoHeight,
+                  transform: mobileLogoCollapsed ? "translateY(-10px)" : "translateY(0)",
+                  opacity: mobileLogoCollapsed ? 0 : 1,
+                }
+              : null),
           }}
         >
           {null}
@@ -4267,7 +4367,7 @@ React.useEffect(() => {
       ) : null}
 
       {/* Products list */}
-      {!isPrimaryDrawerOpen ? (
+      {!isPrimaryDrawerOpen || panel === "product" ? (
         <div
           ref={listScrollRef}
           style={{
@@ -5023,6 +5123,8 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 40,
     background: "black",
     borderBottom: "none",
+    overflow: "hidden",
+    transition: "max-height 180ms ease, opacity 180ms ease",
   },
   headerInner: {
     position: "relative",
@@ -5033,6 +5135,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: 0,
     padding: "0",
+    transition: "transform 180ms ease, opacity 180ms ease",
   },
   brandWrap: {
     display: "inline-flex",
@@ -5096,6 +5199,7 @@ const styles: Record<string, React.CSSProperties> = {
   listScroll: {
     overflowY: "auto",
     WebkitOverflowScrolling: "touch",
+    overscrollBehaviorY: "contain",
     position: "relative",
     zIndex: 10,
     paddingBottom: 20,

@@ -176,6 +176,10 @@ export default function ProductDrawer({
   const qtyRowStyle = isMobileViewport ? styles.drawerQtyRow : styles.drawerQtyRowDesktop;
   const qtyBtnStyle = isMobileViewport ? styles.qtyBtn : styles.qtyBtnDesktop;
   const qtyTextStyle = isMobileViewport ? styles.qty : styles.qtyDesktop;
+  const visibleRelatedProducts = React.useMemo(
+    () => (isMobileViewport ? relatedProducts.slice(0, 8) : relatedProducts),
+    [isMobileViewport, relatedProducts]
+  );
   const productTitle = product?.long_name || product?.name || "Product";
   const lovePoints = React.useMemo(() => splitLovePoints(product?.love_points), [product?.love_points]);
   const activeImageIndex = React.useMemo(() => {
@@ -354,7 +358,15 @@ export default function ProductDrawer({
               >
                 <QtyIcon type="minus" />
               </AppButton>
-              <div style={{ ...qtyTextStyle, width: 44 }}>{qty}</div>
+              <div
+                style={{
+                  ...qtyTextStyle,
+                  width: 44,
+                  ...(qty > 0 ? styles.qtyAccent : null),
+                }}
+              >
+                {qty}
+              </div>
               <AppButton
                 type="button"
                 variant="ghost"
@@ -424,6 +436,20 @@ export default function ProductDrawer({
           }
         >
           <div style={styles.shopWhyCard}>
+            <div style={styles.shopWhyBadge}>IN STOCK</div>
+            <div style={styles.shopWhyText}>Ready for immediate preparation from our temperature controlled storage.</div>
+          </div>
+          <div style={styles.shopWhyCard}>
+            <div style={styles.shopWhyBadge}>EXPRESS / SAME-DAY DELIVERY</div>
+            <div style={styles.shopWhyText}>Order before 9pm to enjoy same day EXPRESS delivery.</div>
+          </div>
+          <div style={styles.shopWhyCard}>
+            <div style={styles.shopWhyBadge}>LOYALTY REWARDS</div>
+            <div style={styles.shopWhyText}>
+              For every order, you earn 5% back in credits applicable to your next order.
+            </div>
+          </div>
+          <div style={styles.shopWhyCard}>
             <div style={styles.shopWhyBadge}>FREE SHIPPING</div>
             <button
               type="button"
@@ -433,69 +459,88 @@ export default function ProductDrawer({
               See minimum spending per area to unlock FREE delivery every time.
             </button>
           </div>
-          <div style={styles.shopWhyCard}>
-            <div style={styles.shopWhyBadge}>IN STOCK</div>
-            <div style={styles.shopWhyText}>Ready for immediate preparation from our temperature controlled storage.</div>
-          </div>
-          <div style={styles.shopWhyCard}>
-            <div style={styles.shopWhyBadge}>EXPRESS / SAME-DAY DELIVERY</div>
-            <div style={styles.shopWhyText}>Order before 9pm to enjoy same day EXPRESS delivery.</div>
-          </div>
         </div>
       </div>
 
       <div style={styles.detailBlockWide}>
         <div style={{ ...styles.stripTitle, marginTop: 20 }}>Products From The Same Category</div>
-        <div style={styles.productStripWrap}>
-          <button
-            type="button"
-            aria-label="Previous related products"
-            onClick={() => scrollRelatedBy(-1)}
-            disabled={!canScrollRelatedLeft}
-            style={{
-              ...styles.stripArrowBtn,
-              ...(canScrollRelatedLeft ? null : styles.stripArrowBtnDisabled),
-            }}
-          >
-            <StripChevronIcon direction="left" />
-          </button>
-        <div ref={relatedStripRef} style={styles.productStripRow}>
-          {relatedProducts.length === 0 ? (
+        {isMobileViewport ? (
+          visibleRelatedProducts.length === 0 ? (
             <div style={styles.drawerDescMuted}>No related products yet.</div>
           ) : (
-            relatedProducts.map((item) => {
-              const id = String(item.id);
-              const itemQty = Math.max(0, Number(cartQtyById[id] ?? 0));
-              return (
-                <div key={id} style={styles.stripTileWrap}>
-                  <ProductCard
-                    product={item}
-                    qty={itemQty}
-                    viewMode="4"
-                    onOpen={(nextId) => onOpenProduct?.(nextId)}
-                    onAdd={onAdd}
-                    onRemove={onRemove}
-                    onSetQty={(nextId, nextQty) => onSetQty?.(nextId, nextQty)}
-                    formatMoney={formatMoney}
-                  />
-                </div>
-              );
-            })
-          )}
-        </div>
-          <button
-            type="button"
-            aria-label="Next related products"
-            onClick={() => scrollRelatedBy(1)}
-            disabled={!canScrollRelatedRight}
-            style={{
-              ...styles.stripArrowBtn,
-              ...(canScrollRelatedRight ? null : styles.stripArrowBtnDisabled),
-            }}
-          >
-            <StripChevronIcon direction="right" />
-          </button>
-        </div>
+            <div style={styles.relatedGridMobile}>
+              {visibleRelatedProducts.map((item) => {
+                const id = String(item.id);
+                const itemQty = Math.max(0, Number(cartQtyById[id] ?? 0));
+                return (
+                  <div key={id} style={styles.relatedGridItemMobile}>
+                    <ProductCard
+                      product={item}
+                      qty={itemQty}
+                      viewMode="5"
+                      onOpen={(nextId) => onOpenProduct?.(nextId)}
+                      onAdd={onAdd}
+                      onRemove={onRemove}
+                      onSetQty={(nextId, nextQty) => onSetQty?.(nextId, nextQty)}
+                      formatMoney={formatMoney}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )
+        ) : (
+          <div style={styles.productStripWrap}>
+            <button
+              type="button"
+              aria-label="Previous related products"
+              onClick={() => scrollRelatedBy(-1)}
+              disabled={!canScrollRelatedLeft}
+              style={{
+                ...styles.stripArrowBtn,
+                ...(canScrollRelatedLeft ? null : styles.stripArrowBtnDisabled),
+              }}
+            >
+              <StripChevronIcon direction="left" />
+            </button>
+            <div ref={relatedStripRef} style={styles.productStripRow}>
+              {visibleRelatedProducts.length === 0 ? (
+                <div style={styles.drawerDescMuted}>No related products yet.</div>
+              ) : (
+                visibleRelatedProducts.map((item) => {
+                  const id = String(item.id);
+                  const itemQty = Math.max(0, Number(cartQtyById[id] ?? 0));
+                  return (
+                    <div key={id} style={styles.stripTileWrap}>
+                      <ProductCard
+                        product={item}
+                        qty={itemQty}
+                        viewMode="4"
+                        onOpen={(nextId) => onOpenProduct?.(nextId)}
+                        onAdd={onAdd}
+                        onRemove={onRemove}
+                        onSetQty={(nextId, nextQty) => onSetQty?.(nextId, nextQty)}
+                        formatMoney={formatMoney}
+                      />
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <button
+              type="button"
+              aria-label="Next related products"
+              onClick={() => scrollRelatedBy(1)}
+              disabled={!canScrollRelatedRight}
+              style={{
+                ...styles.stripArrowBtn,
+                ...(canScrollRelatedRight ? null : styles.stripArrowBtnDisabled),
+              }}
+            >
+              <StripChevronIcon direction="right" />
+            </button>
+          </div>
+        )}
       </div>
 
     </>
@@ -647,7 +692,15 @@ export default function ProductDrawer({
                 >
                   <QtyIcon type="minus" />
                 </AppButton>
-                <div style={{ ...qtyTextStyle, width: 44 }}>{qty}</div>
+                <div
+                  style={{
+                    ...qtyTextStyle,
+                    width: 44,
+                    ...(qty > 0 ? styles.qtyAccent : null),
+                  }}
+                >
+                  {qty}
+                </div>
                 <AppButton
                   type="button"
                   variant="ghost"
@@ -743,7 +796,7 @@ const styles: Record<string, React.CSSProperties> = {
     position: "fixed",
     left: 0,
     right: 0,
-    background: "transparent",
+    background: "var(--tp-page-bg, #000000)",
     zIndex: 850,
   },
   productPanel: {
@@ -751,7 +804,7 @@ const styles: Record<string, React.CSSProperties> = {
     left: "50%",
     transform: "translateX(-50%)",
     width: "var(--tp-rail-width)",
-    background: "transparent",
+    background: "var(--tp-page-bg, #000000)",
     borderRadius: 0,
     zIndex: 900,
     overflow: "hidden",
@@ -762,6 +815,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     position: "relative",
+    background: "inherit",
   },
   desktopShell: {
     height: "100%",
@@ -945,13 +999,13 @@ const styles: Record<string, React.CSSProperties> = {
     position: "absolute",
     top: "50%",
     transform: "translateY(-50%)",
-    width: 65,
-    height: 65,
+    width: 39,
+    height: 39,
     border: "none",
     background: "transparent",
     color: "rgba(255,255,255,0.8)",
-    fontSize: 65,
-    lineHeight: "65px",
+    fontSize: 39,
+    lineHeight: "39px",
     padding: 0,
     display: "inline-flex",
     alignItems: "center",
@@ -960,10 +1014,10 @@ const styles: Record<string, React.CSSProperties> = {
     userSelect: "none",
   },
   mainImageNavBtnLeft: {
-    left: 8,
+    left: -2,
   },
   mainImageNavBtnRight: {
-    right: 8,
+    right: -2,
   },
   drawerImageLogo: {
     opacity: 0.5,
@@ -1201,6 +1255,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     opacity: 0.9,
     lineHeight: 1,
+  },
+  qtyAccent: {
+    color: "#c38a28",
   },
   mobilePurchaseBar: {
     position: "absolute",
@@ -1443,5 +1500,14 @@ const styles: Record<string, React.CSSProperties> = {
     width: 220,
     minWidth: 220,
     scrollSnapAlign: "start",
+  },
+  relatedGridMobile: {
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gap: 10,
+    alignItems: "start",
+  },
+  relatedGridItemMobile: {
+    minWidth: 0,
   },
 };

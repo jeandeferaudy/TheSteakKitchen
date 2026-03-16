@@ -243,6 +243,7 @@ export default function ProductCard({
                           ...styles.qtyBtn,
                           opacity: qty <= 0 ? 0.72 : 0.95,
                           fontWeight: qty <= 0 ? 500 : 900,
+                          color: qty > 0 ? styles.qtyAccent.color : styles.qtyBtn.color,
                         }}
                       >
                         {qty}
@@ -364,6 +365,7 @@ export default function ProductCard({
                       ...styles.qtyBtn,
                       opacity: qty <= 0 ? 0.72 : 0.95,
                       fontWeight: qty <= 0 ? 500 : 900,
+                      color: qty > 0 ? styles.qtyAccent.color : styles.qtyBtn.color,
                     }}
                   >
                     {qty}
@@ -534,6 +536,7 @@ export default function ProductCard({
                   ...styles.qtyBtn,
                   opacity: qty <= 0 ? 0.72 : styles.qty.opacity,
                   fontWeight: qty <= 0 ? 500 : styles.qty.fontWeight,
+                  color: qty > 0 ? styles.qtyAccent.color : styles.qtyBtn.color,
                 }}
               >
                 {qty}
@@ -736,6 +739,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 16,
     fontWeight: 900,
     opacity: 0.9,
+  },
+  qtyAccent: {
+    color: "#c38a28",
   },
   qtyBtn: {
     border: "none",
