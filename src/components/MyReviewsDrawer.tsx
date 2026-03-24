@@ -179,7 +179,7 @@ export default function MyReviewsDrawer({
   const submitReview = React.useCallback(
     async (row: MyReviewQueueItem) => {
       const draft = drafts[row.queue_key];
-      if (!draft) return;
+      if (!draft || !userId) return;
       setSavingKey(row.queue_key);
       setError("");
       try {
