@@ -29,6 +29,7 @@ const RAW_SITE_URL =
 const SITE_URL = RAW_SITE_URL.startsWith("http") ? RAW_SITE_URL : `https://${RAW_SITE_URL}`;
 const SITE_DESCRIPTION = "Great steaks and delicious food delivered to your home.";
 const SITE_TITLE = "The Steak Kitchen";
+const OG_IMAGE_URL = `${SITE_URL.replace(/\/$/, "")}/Logo-black.png`;
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -67,7 +68,7 @@ export const metadata: Metadata = {
     siteName: SITE_TITLE,
     images: [
       {
-        url: "/Logo-black.png",
+        url: OG_IMAGE_URL,
         width: 1024,
         height: 1024,
         alt: SITE_TITLE,
@@ -80,7 +81,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: SITE_TITLE,
     description: SITE_DESCRIPTION,
-    images: ["/Logo-black.png"],
+    images: [OG_IMAGE_URL],
   },
 };
 
