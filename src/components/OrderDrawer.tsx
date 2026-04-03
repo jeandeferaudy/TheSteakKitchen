@@ -36,6 +36,12 @@ type Props = {
   ) => Promise<void> | void;
 };
 
+type CancelRequestResponse = {
+  ok: boolean;
+  error?: string;
+  details?: string;
+};
+
 const STATUS_OPTIONS = ["draft", "submitted", "confirmed", "completed"];
 const PAYMENT_OPTIONS = ["unpaid", "processed", "paid"];
 const DELIVERY_OPTIONS = ["unpacked", "packed", "in progress", "delivered"];
@@ -87,20 +93,20 @@ function statusTone(value: string): React.CSSProperties {
     return {
       color: "#67bf8a",
       borderColor: "rgba(157,228,182,0.75)",
-      background: "rgba(157,228,182,0.26)",
+      background: "transparent",
     };
   }
   if (v === "processed" || v === "packed" || v === "in progress" || v === "submitted") {
     return {
       color: "#c38a28",
       borderColor: "rgba(255,207,122,0.76)",
-      background: "rgba(255,207,122,0.26)",
+      background: "transparent",
     };
   }
   return {
     color: "#c38a28",
     borderColor: "rgba(255,207,122,0.76)",
-    background: "rgba(255,207,122,0.26)",
+    background: "transparent",
   };
 }
 
@@ -150,6 +156,7 @@ export default function OrderDrawer({
   const [savingAmountPaid, setSavingAmountPaid] = React.useState(false);
   const [savingAdminFields, setSavingAdminFields] = React.useState(false);
   const [proofOpen, setProofOpen] = React.useState(false);
+  const [proofPreviewMode, setProofPreviewMode] = React.useState<"image" | "frame">("image");
   const [savingProof, setSavingProof] = React.useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [deletingOrder, setDeletingOrder] = React.useState(false);
@@ -160,6 +167,9 @@ export default function OrderDrawer({
   const [savedPulseByKey, setSavedPulseByKey] = React.useState<Record<string, boolean>>({});
   const savedPulseTimersRef = React.useRef<Record<string, number>>({});
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
+  const [cancelRequestSending, setCancelRequestSending] = React.useState(false);
+  const [cancelRequestMessage, setCancelRequestMessage] = React.useState("");
+  const [cancelRequestError, setCancelRequestError] = React.useState("");
   const [adminDraft, setAdminDraft] = React.useState({
     created_at: "",
     full_name: "",
@@ -238,7 +248,27 @@ export default function OrderDrawer({
       add_thermal_bag: detail.add_thermal_bag,
       delivery_fee: String(detail.delivery_fee ?? 0),
     });
+    setCancelRequestMessage("");
+    setCancelRequestError("");
   }, [detail]);
+
+  React.useEffect(() => {
+    if (!detail?.payment_proof_url) {
+      setProofPreviewMode("image");
+      return;
+    }
+    setProofPreviewMode(looksLikeImage(detail.payment_proof_url) ? "image" : "frame");
+  }, [detail?.payment_proof_url]);
+
+  const customerDeliveryPending = React.useMemo(() => {
+    if (!detail || canEdit) return false;
+    return String(detail.delivery_status || "").trim().toLowerCase() !== "delivered";
+  }, [canEdit, detail]);
+  const customerNoticeText = React.useMemo(() => {
+    if (canEdit || !customerDeliveryPending) return "";
+    if (noticeText) return noticeText;
+    return "Your order has been received by our team and is being processed. You will be updated once delivery is in progress.";
+  }, [canEdit, customerDeliveryPending, noticeText]);
 
   const saveStatusPatch = React.useCallback(
     async (patch: OrderStatusPatch) => {
@@ -490,6 +520,40 @@ export default function OrderDrawer({
     }
   }, [deletingOrder, detail, onDeleteOrder]);
 
+  const requestCancellation = React.useCallback(async () => {
+    if (!detail || cancelRequestSending) return;
+    setCancelRequestSending(true);
+    setCancelRequestMessage("");
+    setCancelRequestError("");
+    try {
+      const response = await fetch("/api/send-cancel-request-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: detail.id,
+          orderNumber: detail.order_number ?? orderNumber8(detail.id),
+          customerName: detail.full_name ?? "",
+          customerEmail: detail.email ?? "",
+          customerPhone: detail.phone ?? "",
+          deliveryDate: detail.delivery_date ?? "",
+          deliveryStatus: detail.delivery_status ?? "",
+          origin: typeof window !== "undefined" ? window.location.origin : "",
+        }),
+      });
+      const payload = (await response.json().catch(() => ({ ok: false }))) as CancelRequestResponse;
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || payload.details || "Failed to send cancellation request.");
+      }
+      setCancelRequestMessage("Cancellation request sent. Our team will review it and contact you.");
+    } catch (e) {
+      setCancelRequestError(
+        e instanceof Error ? e.message : "Failed to send cancellation request."
+      );
+    } finally {
+      setCancelRequestSending(false);
+    }
+  }, [cancelRequestSending, detail]);
+
   if (!isOpen) return null;
 
   const panelTop = Math.max(topOffset, 0);
@@ -605,6 +669,13 @@ export default function OrderDrawer({
         <div
           style={{
             ...styles.content,
+            ...(!canEdit
+              ? {
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  paddingRight: isMobileViewport ? 10 : 8,
+                }
+              : null),
             ...(isMobileViewport
               ? {
                   padding: "8px 10px 20px",
@@ -702,10 +773,16 @@ export default function OrderDrawer({
                 style={
                   isMobileViewport
                     ? { ...styles.sectionGrid, ...styles.sectionGridMobile }
-                    : styles.sectionGrid
+                    : !canEdit
+                      ? { ...styles.sectionGrid, height: "auto", minHeight: "auto" }
+                      : styles.sectionGrid
                 }
               >
-                {noticeText ? <div style={styles.publicNotice}>{noticeText}</div> : null}
+                {customerNoticeText ? (
+                  <div style={styles.customerAlertBanner}>{customerNoticeText}</div>
+                ) : noticeText ? (
+                  <div style={styles.publicNotice}>{noticeText}</div>
+                ) : null}
                 <section
                   style={
                     isMobileViewport
@@ -1305,6 +1382,34 @@ export default function OrderDrawer({
                 </div>
                 </section>
               </div>
+              {!canEdit && detail ? (
+                <section style={styles.customerActionCard}>
+                  <div style={styles.customerActionRow}>
+                    <div style={styles.customerActionCopy}>
+                      <div style={styles.customerActionText}>
+                        <span style={styles.customerActionTitle}>Need to cancel this order?</span>{"    "}
+                        Send a cancellation request to our team before we ship the order.
+                      </div>
+                    </div>
+                    <AppButton
+                      type="button"
+                      style={styles.cancelRequestBtn}
+                      disabled={cancelRequestSending}
+                      onClick={() => {
+                        void requestCancellation();
+                      }}
+                    >
+                      {cancelRequestSending ? "SENDING..." : "REQUEST CANCELLATION"}
+                    </AppButton>
+                  </div>
+                  {cancelRequestMessage ? (
+                    <div style={styles.customerActionMessage}>{cancelRequestMessage}</div>
+                  ) : null}
+                  {cancelRequestError ? (
+                    <div style={styles.customerActionError}>{cancelRequestError}</div>
+                  ) : null}
+                </section>
+              ) : null}
             </>
           ) : null}
         </div>
@@ -1319,8 +1424,13 @@ export default function OrderDrawer({
                 CLOSE
               </AppButton>
             </div>
-            {looksLikeImage(detail.payment_proof_url) ? (
-              <img src={detail.payment_proof_url} alt="Payment proof" style={styles.previewImg} />
+            {proofPreviewMode === "image" ? (
+              <img
+                src={detail.payment_proof_url}
+                alt="Payment proof"
+                style={styles.previewImg}
+                onError={() => setProofPreviewMode("frame")}
+              />
             ) : (
               <iframe src={detail.payment_proof_url} title="Payment proof" style={styles.previewFrame} />
             )}
@@ -1476,7 +1586,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: TITLE_GAP,
-    padding: "18px 0 15px",
+    padding: "18px 8px 15px 0",
   },
   topRowMobile: {
     minHeight: 0,
@@ -1559,7 +1669,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: STATUS_CONTROL_W,
     borderRadius: 8,
     border: "1px solid var(--tp-border-color)",
-    background: "var(--tp-control-bg-soft)",
+    background: "transparent",
     color: "var(--tp-text-color)",
     padding: "0 10px",
     fontSize: 15,
@@ -1572,7 +1682,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: 34,
     borderRadius: 8,
     border: "1px solid var(--tp-border-color)",
-    background: "var(--tp-control-bg-soft)",
+    background: "transparent",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
@@ -1602,6 +1712,17 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "12px 14px",
     fontSize: 15,
     lineHeight: 1.45,
+  },
+  customerAlertBanner: {
+    gridColumn: "1 / -1",
+    border: "1px solid rgba(255,207,122,0.72)",
+    background: "transparent",
+    color: "var(--tp-accent-color)",
+    borderRadius: 10,
+    padding: "12px 14px",
+    fontSize: 15,
+    lineHeight: 1.45,
+    fontWeight: 700,
   },
   leftCol: {
     order: 2,
@@ -1672,6 +1793,64 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 10,
     padding: 12,
     background: "var(--tp-control-bg-soft)",
+  },
+  customerActionCard: {
+    marginTop: 16,
+    border: "1px solid rgba(255,166,77,0.75)",
+    borderRadius: 10,
+    padding: 14,
+    background: "transparent",
+    display: "grid",
+    gap: 10,
+  },
+  customerActionRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+    flexWrap: "wrap",
+  },
+  customerActionCopy: {
+    flex: "1 1 420px",
+    minWidth: 0,
+    display: "flex",
+    alignItems: "center",
+  },
+  customerActionTitle: {
+    fontSize: 13,
+    fontWeight: 800,
+    color: "#ffbf73",
+    letterSpacing: 0.2,
+  },
+  customerActionText: {
+    fontSize: 14,
+    lineHeight: 1.45,
+    color: "var(--tp-text-color)",
+    opacity: 0.94,
+  },
+  cancelRequestBtn: {
+    width: "auto",
+    minWidth: 220,
+    minHeight: 36,
+    borderRadius: 10,
+    border: "1px solid rgba(255,166,77,0.9)",
+    background: "#f08b32",
+    color: "#1a1208",
+    fontSize: 12,
+    fontWeight: 900,
+    letterSpacing: 0.7,
+    padding: "0 14px",
+    justifySelf: "end",
+  },
+  customerActionMessage: {
+    fontSize: 13,
+    lineHeight: 1.4,
+    color: "#ffe0a6",
+  },
+  customerActionError: {
+    fontSize: 13,
+    lineHeight: 1.4,
+    color: "#ffb7b7",
   },
   sectionTitle: { fontSize: 15, letterSpacing: 1.2, fontWeight: 900, marginBottom: 10 },
   itemHeadRow: {
@@ -1935,11 +2114,12 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: "calc(100vh - 40px)",
     border: "1px solid var(--tp-border-color)",
     borderRadius: 12,
-    background: "var(--tp-control-bg-soft)",
+    background: "#0f0f0f",
     padding: 14,
     display: "flex",
     flexDirection: "column",
     gap: 10,
+    boxShadow: "0 18px 48px rgba(0,0,0,0.42)",
   },
   previewTop: { display: "flex", alignItems: "center", justifyContent: "space-between" },
   previewTitle: { fontSize: 15, fontWeight: 800, letterSpacing: 1, color: "var(--tp-text-color)" },
@@ -1952,20 +2132,23 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     fontWeight: 700,
     letterSpacing: 0.8,
+    border: "none",
+    background: "transparent",
   },
   previewImg: {
     width: "100%",
     maxHeight: "calc(100vh - 120px)",
     objectFit: "contain",
     borderRadius: 8,
-    background: "var(--tp-control-bg-soft)",
+    background: "#161616",
+    display: "block",
   },
   previewFrame: {
     width: "100%",
     height: "calc(100vh - 140px)",
     border: "1px solid var(--tp-border-color-soft)",
     borderRadius: 8,
-    background: "var(--tp-control-bg-soft)",
+    background: "#161616",
   },
   confirmModal: {
     width: "min(460px, calc(100vw - 32px))",

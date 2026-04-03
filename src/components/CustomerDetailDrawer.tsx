@@ -41,15 +41,15 @@ function orderNumber8(id: string) {
 function statusTone(value: string): React.CSSProperties {
   const v = String(value || "").toLowerCase();
   if (v === "completed" || v === "paid" || v === "delivered" || v === "confirmed") {
-    return { color: "#67bf8a", borderColor: "rgba(157,228,182,0.75)", background: "rgba(157,228,182,0.26)" };
+    return { color: "#67bf8a", borderColor: "rgba(157,228,182,0.75)", background: "transparent" };
   }
   if (v === "processed" || v === "packed" || v === "in progress" || v === "submitted") {
-    return { color: "#2f99d6", borderColor: "rgba(102,199,255,0.72)", background: "rgba(102,199,255,0.24)" };
+    return { color: "#2f99d6", borderColor: "rgba(102,199,255,0.72)", background: "transparent" };
   }
   if (v === "unpaid" || v === "undelivered" || v === "draft" || v === "unpacked") {
-    return { color: "#c38a28", borderColor: "rgba(255,207,122,0.76)", background: "rgba(255,207,122,0.26)" };
+    return { color: "#c38a28", borderColor: "rgba(255,207,122,0.76)", background: "transparent" };
   }
-  return { color: "var(--tp-text-color)", borderColor: "rgba(255,255,255,0.24)", background: "var(--tp-control-bg-soft)" };
+  return { color: "var(--tp-text-color)", borderColor: "rgba(255,255,255,0.24)", background: "transparent" };
 }
 
 export default function CustomerDetailDrawer({

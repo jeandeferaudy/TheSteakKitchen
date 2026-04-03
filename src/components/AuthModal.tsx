@@ -4,12 +4,34 @@ import * as React from "react";
 import { supabase } from "@/lib/supabase";
 import { AppButton, TOPBAR_FONT_SIZE } from "@/components/ui";
 
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (
+        container: string | HTMLElement,
+        options: {
+          sitekey: string;
+          callback?: (token: string) => void;
+          "expired-callback"?: () => void;
+          "error-callback"?: () => void;
+          theme?: "light" | "dark" | "auto";
+          size?: "normal" | "compact" | "flexible";
+        }
+      ) => string;
+      reset: (widgetId?: string) => void;
+      remove: (widgetId: string) => void;
+    };
+  }
+}
+
 type Props = {
   isOpen: boolean;
   onClose: () => void;
 };
 
 export default function AuthModal({ isOpen, onClose }: Props) {
+  const turnstileSiteKey = String(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "").trim();
+  const shouldUseCaptcha = turnstileSiteKey.length > 0;
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
@@ -21,6 +43,11 @@ export default function AuthModal({ isOpen, onClose }: Props) {
   const [msg, setMsg] = React.useState("");
   const [err, setErr] = React.useState("");
   const [mode, setMode] = React.useState<"login" | "reset" | "update">("login");
+  const [captchaToken, setCaptchaToken] = React.useState("");
+  const [turnstileReady, setTurnstileReady] = React.useState(false);
+  const turnstileContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const turnstileWidgetIdRef = React.useRef<string | null>(null);
+  const captchaPending = shouldUseCaptcha && (!turnstileReady || !captchaToken);
 
   const clearStatus = () => {
     setMsg("");
@@ -40,18 +67,125 @@ export default function AuthModal({ isOpen, onClose }: Props) {
     };
   }, []);
 
+  const getAuthEmailRedirectTo = React.useCallback(() => {
+    const configured = String(process.env.NEXT_PUBLIC_SITE_URL ?? "").trim();
+    if (configured) return configured;
+    if (typeof window === "undefined") return undefined;
+    const { origin, pathname, hostname } = window.location;
+    const isLocalhost =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1";
+    if (isLocalhost) return undefined;
+    return `${origin}${pathname}`;
+  }, []);
+
+  const resetCaptcha = React.useCallback(() => {
+    setCaptchaToken("");
+    const widgetId = turnstileWidgetIdRef.current;
+    if (!widgetId || !window.turnstile) return;
+    window.turnstile.reset(widgetId);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isOpen || !shouldUseCaptcha) return;
+    if (window.turnstile) {
+      setTurnstileReady(true);
+      return;
+    }
+
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[src^="https://challenges.cloudflare.com/turnstile/v0/api.js"]'
+    );
+    const handleReady = () => setTurnstileReady(true);
+
+    if (existing) {
+      existing.addEventListener("load", handleReady);
+      return () => existing.removeEventListener("load", handleReady);
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.defer = true;
+    script.addEventListener("load", handleReady);
+    document.head.appendChild(script);
+
+    return () => {
+      script.removeEventListener("load", handleReady);
+    };
+  }, [isOpen, shouldUseCaptcha]);
+
+  React.useEffect(() => {
+    if (isOpen || !shouldUseCaptcha) return;
+    setCaptchaToken("");
+    setErr("");
+    const widgetId = turnstileWidgetIdRef.current;
+    if (widgetId && window.turnstile) {
+      window.turnstile.remove(widgetId);
+    }
+    turnstileWidgetIdRef.current = null;
+  }, [isOpen, shouldUseCaptcha]);
+
+  React.useEffect(() => {
+    if (!isOpen || !shouldUseCaptcha || mode === "update") return;
+    if (!turnstileReady || !window.turnstile || !turnstileContainerRef.current) return;
+    if (turnstileWidgetIdRef.current) return;
+
+    turnstileWidgetIdRef.current = window.turnstile.render(turnstileContainerRef.current, {
+      sitekey: turnstileSiteKey,
+      theme: "dark",
+      size: "flexible",
+      callback: (token: string) => {
+        setCaptchaToken(token);
+        setErr("");
+      },
+      "expired-callback": () => {
+        setCaptchaToken("");
+      },
+      "error-callback": () => {
+        setCaptchaToken("");
+        setErr(
+          "Captcha failed to load. Check that this domain is allowed in Cloudflare Turnstile and disable content blockers for this site."
+        );
+      },
+    });
+  }, [isOpen, mode, shouldUseCaptcha, turnstileReady, turnstileSiteKey]);
+
+  React.useEffect(() => {
+    if (!shouldUseCaptcha || mode === "update") return;
+    if (!turnstileWidgetIdRef.current || !window.turnstile) return;
+    setCaptchaToken("");
+    window.turnstile.reset(turnstileWidgetIdRef.current);
+  }, [mode, shouldUseCaptcha]);
+
+  React.useEffect(() => {
+    return () => {
+      const widgetId = turnstileWidgetIdRef.current;
+      if (widgetId && window.turnstile) {
+        window.turnstile.remove(widgetId);
+      }
+      turnstileWidgetIdRef.current = null;
+    };
+  }, []);
+
   if (!isOpen) return null;
 
   const signIn = async () => {
     clearStatus();
     setLoadingAction("login");
     try {
-      if (!email.trim()) throw new Error("Email is required.");
-      if (!password.trim()) throw new Error("Password is required.");
+      if (!email.trim() || !password.trim()) {
+        throw new Error("Please fill in email and password.");
+      }
+      if (shouldUseCaptcha && !captchaToken) {
+        throw new Error("Please complete the captcha.");
+      }
 
       const { error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
+        options: shouldUseCaptcha ? { captchaToken } : undefined,
       });
       if (error) throw error;
       onClose();
@@ -59,6 +193,7 @@ export default function AuthModal({ isOpen, onClose }: Props) {
       setErr(e instanceof Error ? e.message : "Authentication failed.");
     } finally {
       setLoadingAction(null);
+      if (shouldUseCaptcha) resetCaptcha();
     }
   };
 
@@ -68,14 +203,17 @@ export default function AuthModal({ isOpen, onClose }: Props) {
     try {
       if (!email.trim()) throw new Error("Email is required.");
       if (!password.trim()) throw new Error("Password is required.");
-      const redirectTo =
-        typeof window !== "undefined"
-          ? `${window.location.origin}${window.location.pathname}`
-          : process.env.NEXT_PUBLIC_SITE_URL;
+      if (shouldUseCaptcha && !captchaToken) {
+        throw new Error("Please complete the captcha.");
+      }
+      const redirectTo = getAuthEmailRedirectTo();
       const { error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
-        options: redirectTo ? { emailRedirectTo: redirectTo } : undefined,
+        options: {
+          ...(redirectTo ? { emailRedirectTo: redirectTo } : null),
+          ...(shouldUseCaptcha ? { captchaToken } : null),
+        },
       });
       if (error) {
         const message = error.message || "Sign up failed.";
@@ -95,6 +233,7 @@ export default function AuthModal({ isOpen, onClose }: Props) {
       setErr(e instanceof Error ? e.message : "Sign up failed.");
     } finally {
       setLoadingAction(null);
+      if (shouldUseCaptcha) resetCaptcha();
     }
   };
 
@@ -103,12 +242,13 @@ export default function AuthModal({ isOpen, onClose }: Props) {
     setLoadingAction("reset");
     try {
       if (!email.trim()) throw new Error("Email is required.");
-      const redirectTo =
-        typeof window !== "undefined"
-          ? `${window.location.origin}${window.location.pathname}`
-          : process.env.NEXT_PUBLIC_SITE_URL;
+      if (shouldUseCaptcha && !captchaToken) {
+        throw new Error("Please complete the captcha.");
+      }
+      const redirectTo = getAuthEmailRedirectTo();
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: redirectTo ?? undefined,
+        ...(shouldUseCaptcha ? { captchaToken } : null),
       });
       if (error) throw error;
       setMsg("Password reset email sent. Check your inbox.");
@@ -116,6 +256,7 @@ export default function AuthModal({ isOpen, onClose }: Props) {
       setErr(e instanceof Error ? e.message : "Password reset failed.");
     } finally {
       setLoadingAction(null);
+      if (shouldUseCaptcha) resetCaptcha();
     }
   };
 
@@ -190,9 +331,17 @@ export default function AuthModal({ isOpen, onClose }: Props) {
                 </svg>
               </button>
             </div>
+            {shouldUseCaptcha ? (
+              <div style={styles.turnstileWrap}>
+                <div ref={turnstileContainerRef} style={styles.turnstileContainer} />
+                {!turnstileReady ? (
+                  <div style={styles.turnstileHint}>Loading captcha…</div>
+                ) : null}
+              </div>
+            ) : null}
             <AppButton
               style={styles.primaryBtn}
-              disabled={loadingAction === "login"}
+              disabled={loadingAction === "login" || captchaPending}
               onClick={signIn}
             >
               {loadingAction === "login" ? "PLEASE WAIT..." : "LOGIN"}
@@ -214,7 +363,7 @@ export default function AuthModal({ isOpen, onClose }: Props) {
             <AppButton
               variant="ghost"
               style={styles.primaryBtn}
-              disabled={loadingAction === "signup"}
+              disabled={loadingAction === "signup" || captchaPending}
               onClick={signUp}
             >
               {loadingAction === "signup" ? "PLEASE WAIT..." : "CREATE ACCOUNT"}
@@ -229,9 +378,17 @@ export default function AuthModal({ isOpen, onClose }: Props) {
               placeholder="Email"
               type="email"
             />
+            {shouldUseCaptcha ? (
+              <div style={styles.turnstileWrap}>
+                <div ref={turnstileContainerRef} style={styles.turnstileContainer} />
+                {!turnstileReady ? (
+                  <div style={styles.turnstileHint}>Loading captcha…</div>
+                ) : null}
+              </div>
+            ) : null}
             <AppButton
               style={styles.primaryBtn}
-              disabled={loadingAction === "reset"}
+              disabled={loadingAction === "reset" || captchaPending}
               onClick={sendReset}
             >
               {loadingAction === "reset" ? "PLEASE WAIT..." : "SEND"}
@@ -329,7 +486,9 @@ const styles: Record<string, React.CSSProperties> = {
     position: "fixed",
     inset: 0,
     background: "rgba(0,0,0,0.72)",
-    zIndex: 1200,
+    backdropFilter: "blur(3px)",
+    WebkitBackdropFilter: "blur(3px)",
+    zIndex: 4000,
   },
   modal: {
     position: "fixed",
@@ -340,9 +499,10 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#0f0f0f",
     border: "1px solid rgba(255,255,255,0.16)",
     borderRadius: 14,
-    zIndex: 1210,
+    zIndex: 4010,
     padding: 16,
     color: "white",
+    boxShadow: "0 18px 48px rgba(0,0,0,0.4)",
   },
   top: {
     display: "flex",
@@ -430,6 +590,24 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     opacity: 0.72,
   },
+  turnstileWrap: {
+    marginTop: 12,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "stretch",
+    justifyContent: "center",
+    minHeight: 76,
+    gap: 8,
+    width: "100%",
+  },
+  turnstileContainer: {
+    width: "100%",
+  },
+  turnstileHint: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.7)",
+    textAlign: "center",
+  },
   msg: {
     marginTop: 10,
     color: "var(--tp-accent)",
@@ -438,7 +616,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   err: {
     marginTop: 8,
-    color: "#ff9f9f",
+    color: "var(--tp-accent)",
     fontSize: 15,
   },
 };

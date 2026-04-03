@@ -2,6 +2,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 
 import Navbar from "@/components/Navbar";
 import ProductGrid from "@/components/ProductGrid";
@@ -268,6 +269,7 @@ export default function Page() {
   const filterScrollAreaRef = React.useRef<HTMLDivElement | null>(null);
 
   const [topOffset, setTopOffset] = React.useState<number>(0);
+  const [isClient, setIsClient] = React.useState(false);
   const [isMobileViewport, setIsMobileViewport] = React.useState<boolean>(false);
   const [mobileLogoCollapsed, setMobileLogoCollapsed] = React.useState<boolean>(false);
 
@@ -475,7 +477,7 @@ export default function Page() {
     summaryTimedOut: boolean;
     isPublic: boolean;
   } | null>(null);
-  const [publicOrderNotice, setPublicOrderNotice] = React.useState<string>("");
+  const [orderNotice, setOrderNotice] = React.useState<string>("");
   const resolvedGridView: "list" | "4" | "5" = gridView;
   const mobileLogoHeight = Math.round(136 * 0.805);
   const desktopNavLeftWidth = Math.round(252 * 1.15);
@@ -544,6 +546,20 @@ export default function Page() {
     const code = typeof err.code === "string" ? `code:${err.code}` : "";
     return [message, details, hint, code].filter(Boolean).join(" — ");
   }, []);
+  const isExpectedAuthTransitionError = React.useCallback((e: unknown) => {
+    const haystack = formatSupabaseError(e, "").toLowerCase();
+    if (!haystack) return false;
+    return (
+      haystack.includes("auth") ||
+      haystack.includes("jwt") ||
+      haystack.includes("session") ||
+      haystack.includes("token") ||
+      haystack.includes("not authenticated") ||
+      haystack.includes("not authorized") ||
+      haystack.includes("permission denied") ||
+      haystack.includes("row-level security")
+    );
+  }, [formatSupabaseError]);
 
   // ----------------------------
   // Layout measure
@@ -574,6 +590,15 @@ export default function Page() {
   }, [isMobileViewport]);
 
   React.useEffect(() => {
+    if (!isClient || !isMobileViewport || !mobileFiltersOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isClient, isMobileViewport, mobileFiltersOpen]);
+
+  React.useEffect(() => {
     if (!isMobileViewport) {
       setMobileLogoCollapsed(false);
       return;
@@ -593,6 +618,10 @@ export default function Page() {
 
   React.useEffect(() => {
     document.documentElement.setAttribute("data-tp-mode", "dark");
+  }, []);
+
+  React.useEffect(() => {
+    setIsClient(true);
   }, []);
 
   React.useEffect(() => {
@@ -1103,7 +1132,9 @@ export default function Page() {
           rows.filter((row) => row.status === null || row.status === "rejected").length
         );
       } else {
-        console.error("Failed to load review submit count", reviewQueueResult.reason);
+        if (!isExpectedAuthTransitionError(reviewQueueResult.reason)) {
+          console.error("Failed to load review submit count", reviewQueueResult.reason);
+        }
         setReviewsToSubmitCount(0);
       }
 
@@ -1112,7 +1143,9 @@ export default function Page() {
           const rows = adminReviewsResult.value as Awaited<ReturnType<typeof fetchAdminReviews>>;
           setReviewsToApproveCount(rows.filter((row) => row.status === "pending").length);
         } else {
-          console.error("Failed to load review approval count", adminReviewsResult.reason);
+          if (!isExpectedAuthTransitionError(adminReviewsResult.reason)) {
+            console.error("Failed to load review approval count", adminReviewsResult.reason);
+          }
           setReviewsToApproveCount(0);
         }
 
@@ -1122,7 +1155,9 @@ export default function Page() {
             rows.filter((row) => String(row.status || "").toLowerCase() !== "completed").length
           );
         } else {
-          console.error("Failed to load not-completed order count", adminOrdersResult.reason);
+          if (!isExpectedAuthTransitionError(adminOrdersResult.reason)) {
+            console.error("Failed to load not-completed order count", adminOrdersResult.reason);
+          }
           setNotCompletedOrdersCount(0);
         }
       } else {
@@ -1136,7 +1171,7 @@ export default function Page() {
     return () => {
       cancelled = true;
     };
-  }, [authReady, authUserId, authEmail, authPhone, isAdmin]);
+  }, [authReady, authUserId, authEmail, authPhone, isAdmin, isExpectedAuthTransitionError]);
 
   const openZoneEditor = React.useCallback((zone: ZoneName) => {
     setZoneEditorError("");
@@ -3891,7 +3926,7 @@ React.useEffect(() => {
       setOrdersOpen(false);
       setAllOrdersOpen(false);
     setAllPurchasesOpen(false);
-      setPublicOrderNotice(opts?.noticeText ?? "");
+      setOrderNotice(opts?.noticeText ?? "");
       if (opts?.detail) {
         setLoadingOrderDetail(false);
         setSelectedOrderDetail(opts.detail);
@@ -4446,6 +4481,13 @@ React.useEffect(() => {
     });
   }, []);
 
+  const openShopFromLogo = React.useCallback(() => {
+    clearAllFilters();
+    setSearch("");
+    setMobileFiltersOpen(false);
+    openShop();
+  }, [clearAllFilters, openShop]);
+
   const scrollGridToTop = React.useCallback(() => {
     const el = listScrollRef.current;
     if (!el) return;
@@ -4474,6 +4516,104 @@ React.useEffect(() => {
     isMobileViewport &&
     (panel === "edit" || panel === "checkout");
   const collapseHeaderForProductDrawer = panel === "product" || (isMobileViewport && mobileLogoCollapsed);
+  const mobileFilterThemeVars = React.useMemo<React.CSSProperties>(
+    () =>
+      ({
+        "--tp-text-color": themeMode === "dark" ? "#ffffff" : "#111111",
+        "--tp-border-color":
+          themeMode === "dark" ? "rgba(255, 255, 255, 0.2)" : "rgba(17, 17, 17, 0.24)",
+        "--tp-accent": themeColors.accent_color || "#b89958",
+        "--tp-page-bg": themeColors.background_color || (themeMode === "dark" ? "#000000" : "#ffffff"),
+        "--tp-control-bg-soft":
+          themeMode === "dark" ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.045)",
+      }) as React.CSSProperties,
+    [themeColors.accent_color, themeColors.background_color, themeMode]
+  );
+  const mobileFilterSheet =
+    isMobileViewport && mobileFiltersOpen && isClient
+      ? createPortal(
+          <div
+            style={{ ...styles.mobileFilterModalBackdrop, ...mobileFilterThemeVars }}
+            onClick={() => setMobileFiltersOpen(false)}
+          >
+            <aside
+              className="tp-sheet-slide-up"
+              style={styles.mobileFilterModal}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={styles.mobileFilterTopRow}>
+                <div style={{ ...styles.filterHeaderRow, ...styles.mobileFilterHeaderRow }}>
+                  <div style={{ ...styles.filterTitle, ...styles.filterTitleInline }}>FILTERS</div>
+                  {selectedFilterCount > 0 ? (
+                    <button
+                      type="button"
+                      style={styles.filterClearText}
+                      onClick={() => {
+                        clearAllFilters();
+                        scrollGridToTop();
+                      }}
+                      aria-label="Clear filters"
+                      title="Clear filters"
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  style={styles.mobileFilterTopCloseBtn}
+                  onClick={() => setMobileFiltersOpen(false)}
+                >
+                  CLOSE
+                </button>
+              </div>
+              {isAdmin && adminAllProductsMode ? (
+                <button
+                  type="button"
+                  style={styles.createBtn}
+                  onClick={() => void createProduct()}
+                >
+                  CREATE
+                </button>
+              ) : null}
+              <div style={styles.mobileFilterScrollArea}>
+                {filterGroups.map((group, index) => (
+                  <div
+                    key={group.key}
+                    style={{
+                      ...styles.filterGroup,
+                      ...(index === 0 ? styles.filterGroupFirst : null),
+                    }}
+                  >
+                    <div style={styles.filterSubheader}>{group.label}</div>
+                    <div style={styles.filterList}>
+                      {filterOptionsByGroup[group.key].map((option) => (
+                        <label
+                          key={`${group.key}-${option.key}`}
+                          style={{ ...styles.filterItem, ...styles.filterItemMobile }}
+                        >
+                          <input
+                            className="tp-filter-checkbox"
+                            style={styles.filterCheckboxMobile}
+                            type="checkbox"
+                            checked={selectedFilters[group.key].includes(option.key)}
+                            onChange={() => {
+                              toggleFilterOption(group.key, option.key);
+                              scrollGridToTop();
+                            }}
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </aside>
+          </div>,
+          document.body
+        )
+      : null;
   const mobileFullDrawerTopOffset = hideMobileChromeForFullDrawer ? 0 : topOffset;
   const showPageLoader = !isMainBgReady || loadingProducts;
 
@@ -4535,19 +4675,27 @@ React.useEffect(() => {
           {null}
           <div style={styles.brandWrap}>
             {(logoUrlsByMode[themeMode] ?? "").trim() ? (
-              <img
-                src={(logoUrlsByMode[themeMode] ?? "").trim()}
-                alt="Tasty Protein logo"
-                style={{
-                  ...styles.brandLogo,
-                  ...(isMobileViewport
-                    ? {
-                        height: mobileLogoHeight,
-                        maxWidth: "min(63vw, 527px)",
-                      }
-                    : null),
-                }}
-              />
+              <button
+                type="button"
+                style={styles.brandLogoButton}
+                onClick={openShopFromLogo}
+                aria-label="Go to shop and clear filters"
+                title="Shop"
+              >
+                <img
+                  src={(logoUrlsByMode[themeMode] ?? "").trim()}
+                  alt="Tasty Protein logo"
+                  style={{
+                    ...styles.brandLogo,
+                    ...(isMobileViewport
+                      ? {
+                          height: mobileLogoHeight,
+                          maxWidth: "min(63vw, 527px)",
+                        }
+                      : null),
+                  }}
+                />
+              </button>
             ) : null}
             {isAdmin && editMode ? (
               <button
@@ -4846,87 +4994,7 @@ React.useEffect(() => {
               ) : null}
             </button>
           ) : null}
-          {isMobileViewport && mobileFiltersOpen ? (
-            <div
-              style={styles.mobileFilterModalBackdrop}
-              onClick={() => setMobileFiltersOpen(false)}
-            >
-              <aside
-                className="tp-sheet-slide-up"
-                style={{ ...styles.mobileFilterModal, ...(mainZoneStyle ?? null) }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div style={styles.mobileFilterTopRow}>
-                  <div style={{ ...styles.filterHeaderRow, ...styles.mobileFilterHeaderRow }}>
-                    <div style={{ ...styles.filterTitle, ...styles.filterTitleInline }}>FILTERS</div>
-                    {selectedFilterCount > 0 ? (
-                      <button
-                        type="button"
-                        style={styles.filterClearText}
-                        onClick={() => {
-                          clearAllFilters();
-                          scrollGridToTop();
-                        }}
-                        aria-label="Clear filters"
-                        title="Clear filters"
-                      >
-                        Clear
-                      </button>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    style={styles.mobileFilterTopCloseBtn}
-                    onClick={() => setMobileFiltersOpen(false)}
-                  >
-                    CLOSE
-                  </button>
-                </div>
-                {isAdmin && adminAllProductsMode ? (
-                  <button
-                    type="button"
-                    style={styles.createBtn}
-                    onClick={() => void createProduct()}
-                  >
-                    CREATE
-                  </button>
-                ) : null}
-                <div style={styles.mobileFilterScrollArea}>
-                  {filterGroups.map((group, index) => (
-                    <div
-                      key={group.key}
-                      style={{
-                        ...styles.filterGroup,
-                        ...(index === 0 ? styles.filterGroupFirst : null),
-                      }}
-                    >
-                      <div style={styles.filterSubheader}>{group.label}</div>
-                      <div style={styles.filterList}>
-                        {filterOptionsByGroup[group.key].map((option) => (
-                          <label
-                            key={`${group.key}-${option.key}`}
-                            style={{ ...styles.filterItem, ...styles.filterItemMobile }}
-                          >
-                            <input
-                              className="tp-filter-checkbox"
-                              style={styles.filterCheckboxMobile}
-                              type="checkbox"
-                              checked={selectedFilters[group.key].includes(option.key)}
-                              onChange={() => {
-                                toggleFilterOption(group.key, option.key);
-                                scrollGridToTop();
-                              }}
-                            />
-                            <span>{option.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </aside>
-            </div>
-          ) : null}
+          {mobileFilterSheet}
         </div>
       ) : null}
 
@@ -5226,11 +5294,11 @@ React.useEffect(() => {
         onChangePaymentProof={handleOrderPaymentProofChange}
         onChangeAdminFields={handleOrderAdminFieldsChange}
         onDeleteOrder={handleOrderDelete}
-        noticeText={orderDrawerSource === "public" ? publicOrderNotice : ""}
+        noticeText={orderNotice}
         backgroundStyle={mainZoneStyle}
         onBack={() => {
           const source = orderDrawerSource;
-          setPublicOrderNotice("");
+          setOrderNotice("");
           setOrderDrawerSource(null);
           setSelectedOrderDetail(null);
           goBackDrawer(source === "public" ? "/shop" : source === "my" ? "/myorders" : "/allorders");
@@ -5419,6 +5487,17 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
     gap: 10,
+  },
+  brandLogoButton: {
+    border: "none",
+    background: "transparent",
+    padding: 0,
+    margin: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    WebkitTapHighlightColor: "transparent",
   },
   headerThemeBtn: {
     position: "absolute",
@@ -5669,8 +5748,10 @@ const styles: Record<string, React.CSSProperties> = {
   mobileFilterModalBackdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 1600,
-    background: "transparent",
+    zIndex: 4000,
+    background: "rgba(0,0,0,0.48)",
+    backdropFilter: "blur(3px)",
+    WebkitBackdropFilter: "blur(3px)",
     display: "flex",
     alignItems: "flex-end",
     justifyContent: "center",
@@ -5684,16 +5765,23 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid var(--tp-border-color)",
     borderRadius: 12,
     padding: 20,
-    background: "var(--tp-page-bg)",
+    backgroundColor: "var(--tp-page-bg)",
+    color: "var(--tp-text-color)",
     display: "flex",
     flexDirection: "column",
     gap: 10,
+    position: "relative",
+    zIndex: 1,
+    touchAction: "pan-y",
+    boxShadow: "0 18px 48px rgba(0,0,0,0.35)",
   },
   mobileFilterScrollArea: {
     flex: 1,
     minHeight: 0,
     overflowY: "auto",
     overscrollBehaviorY: "contain",
+    WebkitOverflowScrolling: "touch",
+    touchAction: "pan-y",
     paddingRight: 2,
     marginTop: 8,
   },
@@ -5779,6 +5867,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     fontWeight: 800,
     letterSpacing: 0.4,
+    color: "var(--tp-text-color)",
     opacity: 0.95,
     marginTop: 6,
   },
@@ -5788,6 +5877,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
     fontSize: 15,
     minHeight: 24,
+    color: "var(--tp-text-color)",
     cursor: "pointer",
   },
   filterItemDesktop: {

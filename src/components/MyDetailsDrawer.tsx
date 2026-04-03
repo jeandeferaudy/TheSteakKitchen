@@ -227,14 +227,20 @@ export default function MyDetailsDrawer({
         const {
           data: { user },
         } = await supabase.auth.getUser();
+        const composedFullName = composeCustomerFullName({
+          firstName: draft.first_name,
+          lastName: draft.last_name,
+        });
+        const normalizedPhone = String(draft.phone ?? "").trim();
+        if (!composedFullName || !normalizedPhone) {
+          setLoading(false);
+          return;
+        }
         const customer = await ensureCustomerRecord({
           firstName: draft.first_name,
           lastName: draft.last_name,
-          fullName: composeCustomerFullName({
-            firstName: draft.first_name,
-            lastName: draft.last_name,
-          }),
-          phone: draft.phone,
+          fullName: composedFullName,
+          phone: normalizedPhone,
           email: user?.email ?? null,
           address: [
             draft.attention_to,
@@ -257,7 +263,11 @@ export default function MyDetailsDrawer({
         }
         setAvailableSteakCredits(Math.max(0, customer.available_steak_credits));
       } catch (customerError) {
-        console.error("Failed to sync linked customer", customerError);
+        setError(
+          customerError instanceof Error
+            ? customerError.message
+            : "Failed to sync linked customer."
+        );
       }
     }
     setLoading(false);

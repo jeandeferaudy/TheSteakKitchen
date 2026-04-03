@@ -42,27 +42,27 @@ function statusTone(status: string | null): React.CSSProperties {
     return {
       color: "#67bf8a",
       borderColor: "rgba(157,228,182,0.75)",
-      background: "rgba(157,228,182,0.18)",
+      background: "transparent",
     };
   }
   if (status === "rejected") {
     return {
       color: "#de6464",
       borderColor: "rgba(222,100,100,0.68)",
-      background: "rgba(222,100,100,0.18)",
+      background: "transparent",
     };
   }
   if (status === "pending") {
     return {
       color: "#c38a28",
       borderColor: "rgba(255,207,122,0.7)",
-      background: "rgba(255,207,122,0.16)",
+      background: "transparent",
     };
   }
   return {
     color: "var(--tp-text-color)",
     borderColor: "var(--tp-border-color)",
-    background: "var(--tp-control-bg-soft)",
+    background: "transparent",
   };
 }
 
