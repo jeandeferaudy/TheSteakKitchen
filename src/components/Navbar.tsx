@@ -33,6 +33,7 @@ type Props = {
   onOpenAllPurchases: () => void;
   onOpenAllProducts: () => void;
   onOpenAdminReviews: () => void;
+  onOpenLoyaltyPrograms: () => void;
   onOpenInventory: () => void;
   onOpenAnalytics: () => void;
   onLogout: () => void;
@@ -70,6 +71,7 @@ export default function Navbar({
   onOpenAllPurchases,
   onOpenAllProducts,
   onOpenAdminReviews,
+  onOpenLoyaltyPrograms,
   onOpenInventory,
   onOpenAnalytics,
   onLogout,
@@ -262,6 +264,17 @@ export default function Navbar({
                 }}
               >
                 {renderMenuLabel("Reviews", reviewsToApproveCount)}
+              </button>
+
+              <button
+                type="button"
+                style={styles.menuItem}
+                onClick={() => {
+                  setAuthMenuOpen(false);
+                  onOpenLoyaltyPrograms();
+                }}
+              >
+                {renderMenuLabel("Loyalty programs")}
               </button>
 
               <button

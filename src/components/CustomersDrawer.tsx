@@ -14,6 +14,7 @@ type Props = {
   onClose: () => void;
   customers: CustomerAdminItem[];
   onOpenCustomer?: (customerId: string) => void;
+  onBulkSetSteakCreditsEnabled?: (customerIds: string[], enabled: boolean) => Promise<void> | void;
   backgroundStyle?: React.CSSProperties;
 };
 
@@ -27,10 +28,14 @@ export default function CustomersDrawer({
   onClose,
   customers,
   onOpenCustomer,
+  onBulkSetSteakCreditsEnabled,
   backgroundStyle,
 }: Props) {
   const [search, setSearch] = React.useState("");
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
+  const [actionsOpen, setActionsOpen] = React.useState(false);
+  const [bulkSaving, setBulkSaving] = React.useState(false);
 
   React.useEffect(() => {
     const onResize = () => setIsMobileViewport(window.innerWidth < 768);
@@ -38,6 +43,18 @@ export default function CustomersDrawer({
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setSelectedIds([]);
+      setActionsOpen(false);
+      setBulkSaving(false);
+    }
+  }, [isOpen]);
+
+  React.useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => customers.some((customer) => customer.id === id)));
+  }, [customers]);
 
   const panelTop = Math.max(topOffset, 0);
   const panelHeight = `calc(100vh - ${panelTop}px)`;
@@ -52,6 +69,29 @@ export default function CustomersDrawer({
       );
     });
   }, [customers, search]);
+
+  const selectedCount = selectedIds.length;
+  const canUseBulkActions = selectedCount > 0 && !bulkSaving;
+  const toggleSelected = (customerId: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(customerId) ? prev.filter((id) => id !== customerId) : [...prev, customerId]
+    );
+  };
+
+  const runBulkAction = async (enabled: boolean) => {
+    if (!onBulkSetSteakCreditsEnabled || !canUseBulkActions) return;
+    setBulkSaving(true);
+    try {
+      await onBulkSetSteakCreditsEnabled(selectedIds, enabled);
+      setSelectedIds([]);
+      setActionsOpen(false);
+    } catch (error) {
+      console.error("Failed to update selected customers", error);
+      alert("Failed to update selected customers.");
+    } finally {
+      setBulkSaving(false);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -89,7 +129,43 @@ export default function CustomersDrawer({
         </div>
 
         <div style={{ ...styles.content, ...(isMobileViewport ? styles.contentMobile : null) }}>
-          <div style={styles.searchWrap}>
+          <div style={styles.toolbarRow}>
+            <div style={styles.actionsWrap}>
+              <AppButton
+                type="button"
+                variant="ghost"
+                style={{
+                  ...styles.actionsButton,
+                  ...(canUseBulkActions ? styles.actionsButtonEnabled : styles.actionsButtonDisabled),
+                }}
+                disabled={!canUseBulkActions}
+                onClick={() => setActionsOpen((prev) => !prev)}
+              >
+                {bulkSaving ? "SAVING..." : "Actions"}
+              </AppButton>
+              {actionsOpen && canUseBulkActions ? (
+                <div style={styles.actionsMenu}>
+                  <button
+                    type="button"
+                    style={styles.actionsMenuItem}
+                    onClick={() => {
+                      void runBulkAction(true);
+                    }}
+                  >
+                    Activate Steak Credits
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.actionsMenuItem}
+                    onClick={() => {
+                      void runBulkAction(false);
+                    }}
+                  >
+                    Deactivate Steak Credits
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -100,9 +176,11 @@ export default function CustomersDrawer({
 
           {!isMobileViewport ? (
             <div style={styles.listHead}>
+              <div />
               <div>CUSTOMER</div>
               <div>EMAIL</div>
               <div>ACCOUNT</div>
+              <div>CREDITS</div>
               <div>ORDERS</div>
               <div>TOTAL ORDERED</div>
               <div>CURRENT CREDITS</div>
@@ -120,6 +198,18 @@ export default function CustomersDrawer({
                   style={styles.mobileCard}
                   onClick={() => onOpenCustomer?.(customer.id)}
                 >
+                  <div
+                    style={styles.mobileCheckboxWrap}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(customer.id)}
+                      onChange={() => toggleSelected(customer.id)}
+                      style={styles.rowCheckbox}
+                      aria-label={`Select ${customer.customer_name}`}
+                    />
+                  </div>
                   <div style={styles.mobileName}>{customer.customer_name}</div>
                   <div style={styles.mobileEmail}>{customer.email || "—"}</div>
                   <div style={styles.mobileMeta}>
@@ -130,6 +220,18 @@ export default function CustomersDrawer({
                       }
                     >
                       {customer.has_account ? "Yes" : "No"}
+                    </span>
+                  </div>
+                  <div style={styles.mobileMeta}>
+                    Credits:{" "}
+                    <span
+                      style={
+                        customer.steak_credits_enabled
+                          ? styles.accountYesText
+                          : styles.accountNoText
+                      }
+                    >
+                      {customer.steak_credits_enabled ? "Yes" : "No"}
                     </span>
                   </div>
                   <div style={styles.mobileMeta}>Orders: {customer.order_count}</div>
@@ -143,6 +245,18 @@ export default function CustomersDrawer({
                   style={styles.listRow}
                   onClick={() => onOpenCustomer?.(customer.id)}
                 >
+                  <div
+                    style={styles.checkboxCell}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(customer.id)}
+                      onChange={() => toggleSelected(customer.id)}
+                      style={styles.rowCheckbox}
+                      aria-label={`Select ${customer.customer_name}`}
+                    />
+                  </div>
                   <div style={styles.customerCell}>
                     {customer.customer_name}
                   </div>
@@ -155,6 +269,18 @@ export default function CustomersDrawer({
                       }}
                     >
                       {customer.has_account ? "Yes" : "No"}
+                    </span>
+                  </div>
+                  <div>
+                    <span
+                      style={{
+                        ...styles.accountPill,
+                        ...(customer.steak_credits_enabled
+                          ? styles.accountPillYes
+                          : styles.accountPillNo),
+                      }}
+                    >
+                      {customer.steak_credits_enabled ? "Yes" : "No"}
                     </span>
                   </div>
                   <div>{customer.order_count}</div>
@@ -241,12 +367,58 @@ const styles: Record<string, React.CSSProperties> = {
   contentMobile: {
     padding: "8px 12px 20px",
   },
+  toolbarRow: {
+    marginBottom: 12,
+    display: "grid",
+    gridTemplateColumns: "auto minmax(0, 1fr)",
+    gap: 12,
+    alignItems: "center",
+  },
+  actionsWrap: {
+    position: "relative",
+  },
+  actionsButton: {
+    minWidth: 104,
+    height: 40,
+    padding: "0 15px",
+    borderRadius: 10,
+  },
+  actionsButtonEnabled: {
+    color: "var(--tp-accent)",
+    borderColor: "rgba(195,138,40,0.65)",
+    background: "rgba(195,138,40,0.08)",
+  },
+  actionsButtonDisabled: {
+    opacity: 0.45,
+  },
+  actionsMenu: {
+    position: "absolute",
+    top: "calc(100% + 8px)",
+    left: 0,
+    minWidth: 230,
+    borderRadius: 12,
+    border: "1px solid var(--tp-border-color-soft)",
+    background: "rgba(15,15,15,0.96)",
+    boxShadow: "0 12px 28px rgba(0,0,0,0.28)",
+    overflow: "hidden",
+    zIndex: 20,
+  },
+  actionsMenuItem: {
+    width: "100%",
+    border: "none",
+    background: "transparent",
+    color: "var(--tp-text-color)",
+    textAlign: "left",
+    padding: "12px 14px",
+    fontSize: 14,
+    cursor: "pointer",
+  },
   searchWrap: {
     marginBottom: 12,
   },
   searchInput: {
     width: "100%",
-    maxWidth: 420,
+    minWidth: 0,
     height: 40,
     borderRadius: 10,
     border: "1px solid var(--tp-border-color)",
@@ -256,7 +428,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   listHead: {
     display: "grid",
-    gridTemplateColumns: "1.3fr 1.4fr 0.7fr 0.5fr 0.9fr 0.9fr",
+    gridTemplateColumns: "34px 1.2fr 1.35fr 0.7fr 0.7fr 0.5fr 0.9fr 0.9fr",
     gap: 12,
     padding: "0 10px 10px",
     fontSize: 12,
@@ -266,7 +438,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   listRow: {
     display: "grid",
-    gridTemplateColumns: "1.3fr 1.4fr 0.7fr 0.5fr 0.9fr 0.9fr",
+    gridTemplateColumns: "34px 1.2fr 1.35fr 0.7fr 0.7fr 0.5fr 0.9fr 0.9fr",
     gap: 12,
     alignItems: "center",
     width: "100%",
@@ -279,6 +451,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderRight: "none",
     borderBottom: "none",
     textAlign: "left",
+    cursor: "pointer",
+  },
+  checkboxCell: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rowCheckbox: {
+    width: 16,
+    height: 16,
+    accentColor: "#c38a28",
     cursor: "pointer",
   },
   customerCell: {
@@ -329,6 +512,12 @@ const styles: Record<string, React.CSSProperties> = {
     borderLeft: "none",
     borderRight: "none",
     borderBottom: "none",
+    position: "relative",
+  },
+  mobileCheckboxWrap: {
+    position: "absolute",
+    top: 14,
+    right: 0,
   },
   mobileName: {
     fontSize: 16,

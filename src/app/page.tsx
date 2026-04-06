@@ -12,6 +12,9 @@ import ProductEditorDrawer from "@/components/ProductEditorDrawer";
 import CartDrawer from "@/components/CartDrawer";
 import CheckoutDrawer from "@/components/CheckoutDrawer";
 import AuthModal from "@/components/AuthModal";
+import LoyaltyProgramsDrawer, {
+  type LoyaltyProgramsDraft,
+} from "@/components/LoyaltyProgramsDrawer";
 import MyDetailsDrawer from "@/components/MyDetailsDrawer";
 import MyOrdersDrawer, { type MyOrderItem } from "@/components/MyOrdersDrawer";
 import MyReviewsDrawer from "@/components/MyReviewsDrawer";
@@ -82,12 +85,19 @@ import {
 import { supabase } from "@/lib/supabase";
 import {
   adjustCustomerSteakCredits,
+  deleteCustomerById,
+  ensureCustomerForAccountSignup,
+  fetchAdminProfilesForCustomerLink,
   fetchAdminCustomerDetail,
   ensureCustomerRecord,
   fetchAdminCustomers,
+  findCustomerByEmail,
   fetchCustomerById,
   linkProfileToCustomer,
+  mergeCustomers,
+  updateCustomerSteakCreditsEnabled,
   updateCustomerRecord,
+  type AdminProfileOption,
   type CustomerAdminItem,
   type CustomerAdminDetail,
 } from "@/lib/customersApi";
@@ -168,6 +178,8 @@ type BrandingRow = {
   logo_url_light?: string | null;
   gcash_qr_url?: string | null;
   gcash_phone?: string | null;
+  offer_steak_credits_to_guests?: boolean | null;
+  auto_activate_steak_credits_for_new_accounts?: boolean | null;
 };
 
 type ThemeColorsRow = ThemeColorsDraft & {
@@ -307,6 +319,7 @@ export default function Page() {
   const [authUserId, setAuthUserId] = React.useState<string | null>(null);
   const [authEmail, setAuthEmail] = React.useState<string>("");
   const [authPhone, setAuthPhone] = React.useState<string>("");
+  const [steakCreditsEnabled, setSteakCreditsEnabled] = React.useState<boolean>(false);
   const [detailsOpen, setDetailsOpen] = React.useState<boolean>(false);
   const [ordersOpen, setOrdersOpen] = React.useState<boolean>(false);
   const [myReviewsOpen, setMyReviewsOpen] = React.useState<boolean>(false);
@@ -322,6 +335,8 @@ export default function Page() {
   const [myOrders, setMyOrders] = React.useState<MyOrderItem[]>([]);
   const [allOrders, setAllOrders] = React.useState<MyOrderItem[]>([]);
   const [allCustomers, setAllCustomers] = React.useState<CustomerAdminItem[]>([]);
+  const [adminProfiles, setAdminProfiles] = React.useState<AdminProfileOption[]>([]);
+  const [deleteUserAvailable, setDeleteUserAvailable] = React.useState(false);
   const [allPurchases, setAllPurchases] = React.useState<PurchaseItem[]>([]);
   const [reviewsToSubmitCount, setReviewsToSubmitCount] = React.useState<number>(0);
   const [reviewsToApproveCount, setReviewsToApproveCount] = React.useState<number>(0);
@@ -340,6 +355,8 @@ export default function Page() {
   const [selectedPurchaseDetail, setSelectedPurchaseDetail] = React.useState<PurchaseDetail | null>(null);
   const [loadingPurchaseDetail, setLoadingPurchaseDetail] = React.useState<boolean>(false);
   const [submittingCheckout, setSubmittingCheckout] = React.useState<boolean>(false);
+  const [availableSteakCredits, setAvailableSteakCredits] = React.useState<number>(0);
+  const [loyaltyProgramsOpen, setLoyaltyProgramsOpen] = React.useState<boolean>(false);
   const [adminAllProductsMode, setAdminAllProductsMode] = React.useState<boolean>(false);
   const [zoneStylesByMode, setZoneStylesByMode] = React.useState<
     Record<"dark" | "light", Record<ZoneName, ZoneStyleDraft>>
@@ -357,6 +374,12 @@ export default function Page() {
     gcash_qr_url: "",
     gcash_phone: "",
   });
+  const [loyaltyProgramsDraft, setLoyaltyProgramsDraft] = React.useState<LoyaltyProgramsDraft>({
+    offer_steak_credits_to_guests: false,
+    auto_activate_steak_credits_for_new_accounts: false,
+  });
+  const [loyaltyProgramsSaving, setLoyaltyProgramsSaving] = React.useState(false);
+  const [loyaltyProgramsError, setLoyaltyProgramsError] = React.useState("");
   const [logoEditorOpen, setLogoEditorOpen] = React.useState<boolean>(false);
   const [logoEditorSaving, setLogoEditorSaving] = React.useState<boolean>(false);
   const [logoEditorError, setLogoEditorError] = React.useState<string>("");
@@ -813,20 +836,27 @@ export default function Page() {
 
   React.useEffect(() => {
     const loadLogo = async () => {
-      const { data, error } = await supabase
-        .from("ui_branding")
-        .select("logo_url,logo_url_dark,logo_url_light,gcash_qr_url,gcash_phone")
-        .limit(1)
-        .maybeSingle();
-      let row = (data ?? null) as BrandingRow | null;
-      if (error) {
-        const legacy = await supabase
+      const fullSelect =
+        "logo_url,logo_url_dark,logo_url_light,gcash_qr_url,gcash_phone,offer_steak_credits_to_guests,auto_activate_steak_credits_for_new_accounts";
+      const paymentSelect = "logo_url,logo_url_dark,logo_url_light,gcash_qr_url,gcash_phone";
+      const legacySelect = "logo_url,logo_url_dark,logo_url_light";
+
+      let row: BrandingRow | null = null;
+      let query = await supabase.from("ui_branding").select(fullSelect).limit(1).maybeSingle();
+
+      if (query.error) {
+        query = await supabase
           .from("ui_branding")
-          .select("logo_url")
+          .select(paymentSelect)
           .limit(1)
           .maybeSingle();
-        row = (legacy.data ?? null) as BrandingRow | null;
       }
+
+      if (query.error) {
+        query = await supabase.from("ui_branding").select(legacySelect).limit(1).maybeSingle();
+      }
+
+      row = (query.data ?? null) as BrandingRow | null;
       const fallback = row?.logo_url ?? "";
       const next: Record<"dark" | "light", string> = {
         dark: (row?.logo_url_dark ?? "").trim() || fallback,
@@ -835,6 +865,12 @@ export default function Page() {
       setCheckoutPaymentDraft({
         gcash_qr_url: String(row?.gcash_qr_url ?? "").trim(),
         gcash_phone: String(row?.gcash_phone ?? "").trim(),
+      });
+      setLoyaltyProgramsDraft({
+        offer_steak_credits_to_guests: Boolean(row?.offer_steak_credits_to_guests),
+        auto_activate_steak_credits_for_new_accounts: Boolean(
+          row?.auto_activate_steak_credits_for_new_accounts
+        ),
       });
       try {
         window.localStorage.setItem("tp_logo_urls_by_mode", JSON.stringify(next));
@@ -1025,7 +1061,11 @@ export default function Page() {
 
 
   React.useEffect(() => {
-    if (!authUserId) return;
+    if (!authUserId) {
+      setSteakCreditsEnabled(false);
+      setAvailableSteakCredits(0);
+      return;
+    }
     const fillCustomer = async () => {
       const { data } = await supabase
         .from("profiles")
@@ -1036,9 +1076,20 @@ export default function Page() {
         .maybeSingle();
 
       const linkedCustomerId = data?.customer_id ? String(data.customer_id) : "";
-      const linkedCustomer = linkedCustomerId
+      let linkedCustomer = linkedCustomerId
         ? await fetchCustomerById(linkedCustomerId).catch(() => null)
         : null;
+      const authEmailKey = String(authEmail ?? "").trim().toLowerCase();
+      const linkedEmailKey = String(linkedCustomer?.email ?? "").trim().toLowerCase();
+      if (authEmailKey && authEmailKey !== linkedEmailKey) {
+        const emailMatchedCustomer = await findCustomerByEmail(authEmail).catch(() => null);
+        if (emailMatchedCustomer && emailMatchedCustomer.id !== linkedCustomer?.id) {
+          linkedCustomer = emailMatchedCustomer;
+          await linkProfileToCustomer(authUserId, emailMatchedCustomer.id).catch(() => null);
+        }
+      }
+      setSteakCreditsEnabled(Boolean(linkedCustomer?.steak_credits_enabled));
+      setAvailableSteakCredits(Math.max(0, Number(linkedCustomer?.available_steak_credits ?? 0)));
 
       const firstName =
         String(data?.first_name ?? "").trim() || String(linkedCustomer?.first_name ?? "").trim();
@@ -1379,6 +1430,38 @@ export default function Page() {
     [formatSupabaseError]
   );
 
+  const saveLoyaltyProgramsDraft = React.useCallback(
+    async (next: LoyaltyProgramsDraft): Promise<boolean> => {
+      setLoyaltyProgramsSaving(true);
+      setLoyaltyProgramsError("");
+      try {
+        const payload = {
+          id: 1,
+          offer_steak_credits_to_guests: Boolean(next.offer_steak_credits_to_guests),
+          auto_activate_steak_credits_for_new_accounts: Boolean(
+            next.auto_activate_steak_credits_for_new_accounts
+          ),
+        };
+        const { error } = await supabase
+          .from("ui_branding")
+          .upsert(payload, { onConflict: "id" });
+        if (error) throw error;
+        setLoyaltyProgramsDraft(payload);
+        return true;
+      } catch (e: unknown) {
+        const message = formatSupabaseError(
+          e,
+          "Failed to save loyalty settings. Apply DB migration for ui_branding first."
+        );
+        setLoyaltyProgramsError(message);
+        return false;
+      } finally {
+        setLoyaltyProgramsSaving(false);
+      }
+    },
+    [formatSupabaseError]
+  );
+
   const saveThemeColors = React.useCallback(
     async (next: ThemeColorsDraft): Promise<boolean> => {
       const current = themeColorsByMode[themeMode];
@@ -1563,6 +1646,7 @@ export default function Page() {
     setAllPurchasesOpen(false);
     setInventoryOpen(false);
     setAnalyticsOpen(false);
+    setLoyaltyProgramsOpen(false);
     setOrderDrawerSource(null);
     setSelectedOrderDetail(null);
     setSelectedCustomerId(null);
@@ -1593,6 +1677,7 @@ export default function Page() {
       allPurchasesOpen ||
       inventoryOpen ||
       analyticsOpen ||
+      loyaltyProgramsOpen ||
       !!orderDrawerSource ||
       loadingCustomerDetail ||
       !!selectedCustomerDetail ||
@@ -1605,6 +1690,7 @@ export default function Page() {
       analyticsOpen,
       detailsOpen,
       inventoryOpen,
+      loyaltyProgramsOpen,
       loadingCustomerDetail,
       loadingPurchaseDetail,
       allReviewsOpen,
@@ -2183,6 +2269,8 @@ React.useEffect(() => {
       if (!authUserId) {
         setProfileHasAddress(false);
         setSaveAddressToProfile(false);
+        setSteakCreditsEnabled(false);
+        setAvailableSteakCredits(0);
         return;
       }
       const { data } = await supabase
@@ -2197,6 +2285,8 @@ React.useEffect(() => {
       const linkedCustomer = linkedCustomerId
         ? await fetchCustomerById(linkedCustomerId).catch(() => null)
         : null;
+      setSteakCreditsEnabled(Boolean(linkedCustomer?.steak_credits_enabled));
+      setAvailableSteakCredits(Math.max(0, Number(linkedCustomer?.available_steak_credits ?? 0)));
 
       const firstName =
         String(data?.first_name ?? "").trim() || String(linkedCustomer?.first_name ?? "").trim();
@@ -2284,14 +2374,44 @@ React.useEffect(() => {
     }
   }, [authEmail, authPhone, authUserId, hasCartQtyOverLimit, pushAppRoute]);
 
-  const openProfileDrawer = React.useCallback((opts?: { skipNavigate?: boolean }) => {
-    closePrimaryDrawers();
-    setCartOpen(false);
-    setDetailsOpen(true);
-    if (!opts?.skipNavigate) {
-      pushAppRoute("/profile");
-    }
-  }, [closePrimaryDrawers, pushAppRoute]);
+  const openProfileDrawer = React.useCallback(
+    async (opts?: { skipNavigate?: boolean }) => {
+      closePrimaryDrawers();
+      setCartOpen(false);
+      setDetailsOpen(true);
+      if (!opts?.skipNavigate) {
+        pushAppRoute("/profile");
+      }
+
+      if (!authUserId) {
+        setSteakCreditsEnabled(false);
+        setAvailableSteakCredits(0);
+        return;
+      }
+
+      const { data } = await supabase
+        .from("profiles")
+        .select("customer_id")
+        .eq("id", authUserId)
+        .maybeSingle();
+      const linkedCustomerId = data?.customer_id ? String(data.customer_id) : "";
+      let linkedCustomer = linkedCustomerId
+        ? await fetchCustomerById(linkedCustomerId).catch(() => null)
+        : null;
+      const authEmailKey = String(authEmail ?? "").trim().toLowerCase();
+      const linkedEmailKey = String(linkedCustomer?.email ?? "").trim().toLowerCase();
+      if (authEmailKey && authEmailKey !== linkedEmailKey) {
+        const emailMatchedCustomer = await findCustomerByEmail(authEmail).catch(() => null);
+        if (emailMatchedCustomer && emailMatchedCustomer.id !== linkedCustomer?.id) {
+          linkedCustomer = emailMatchedCustomer;
+          await linkProfileToCustomer(authUserId, emailMatchedCustomer.id).catch(() => null);
+        }
+      }
+      setSteakCreditsEnabled(Boolean(linkedCustomer?.steak_credits_enabled));
+      setAvailableSteakCredits(Math.max(0, Number(linkedCustomer?.available_steak_credits ?? 0)));
+    },
+    [authEmail, authUserId, closePrimaryDrawers, pushAppRoute]
+  );
 
   const openMyReviewsDrawer = React.useCallback((opts?: { skipNavigate?: boolean }) => {
     closePrimaryDrawers();
@@ -2301,6 +2421,16 @@ React.useEffect(() => {
       pushAppRoute("/myreviews");
     }
   }, [closePrimaryDrawers, pushAppRoute]);
+
+  const openLoyaltyProgramsDrawer = React.useCallback((opts?: { skipNavigate?: boolean }) => {
+    if (!isAdmin) return;
+    closePrimaryDrawers();
+    setCartOpen(false);
+    setLoyaltyProgramsOpen(true);
+    if (!opts?.skipNavigate) {
+      pushAppRoute("/loyalty-programs");
+    }
+  }, [closePrimaryDrawers, isAdmin, pushAppRoute]);
 
   const openAllReviewsDrawer = React.useCallback((opts?: { skipNavigate?: boolean }) => {
     if (!isAdmin) return;
@@ -2890,11 +3020,47 @@ React.useEffect(() => {
     }
   }, [closePrimaryDrawers, pushAppRoute]);
 
+  const refreshAdminCustomers = React.useCallback(async () => {
+    const [rows, profiles] = await Promise.all([
+      fetchAdminCustomers(),
+      fetchAdminProfilesForCustomerLink(),
+    ]);
+    setAllCustomers(rows);
+    setAdminProfiles(profiles);
+    return rows;
+  }, []);
+
+  React.useEffect(() => {
+    if (!isAdmin) {
+      setDeleteUserAvailable(false);
+      return;
+    }
+    let cancelled = false;
+    const loadCapability = async () => {
+      try {
+        const response = await fetch("/api/admin/delete-user");
+        const payload = (await response.json().catch(() => null)) as
+          | { available?: boolean }
+          | null;
+        if (!cancelled) {
+          setDeleteUserAvailable(Boolean(payload?.available));
+        }
+      } catch {
+        if (!cancelled) {
+          setDeleteUserAvailable(false);
+        }
+      }
+    };
+    void loadCapability();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
   const openAllCustomersDrawer = React.useCallback((opts?: { skipNavigate?: boolean }) => {
     const loadAllCustomers = async () => {
       try {
-        const rows = await fetchAdminCustomers();
-        setAllCustomers(rows);
+        await refreshAdminCustomers();
       } catch (e) {
         console.error("Failed to load customers", e);
       }
@@ -2906,7 +3072,7 @@ React.useEffect(() => {
     if (!opts?.skipNavigate) {
       pushAppRoute("/customers");
     }
-  }, [closePrimaryDrawers, pushAppRoute]);
+  }, [closePrimaryDrawers, pushAppRoute, refreshAdminCustomers]);
 
   const createOrderAndOpen = React.useCallback(async () => {
     try {
@@ -2965,13 +3131,218 @@ React.useEffect(() => {
           }
         : prev
     );
-  }, []);
+    if (authUserId) {
+      const { data } = await supabase
+        .from("profiles")
+        .select("customer_id")
+        .eq("id", authUserId)
+        .maybeSingle();
+      const linkedCustomerId = data?.customer_id ? String(data.customer_id) : "";
+      if (linkedCustomerId === customerId) {
+        setAvailableSteakCredits(nextBalance);
+      }
+    }
+  }, [authUserId]);
+
+  const handleToggleCustomerSteakCreditsEnabled = React.useCallback(
+    async (customerId: string, enabled: boolean) => {
+      const nextEnabled = await updateCustomerSteakCreditsEnabled(customerId, enabled);
+      setAllCustomers((prev) =>
+        prev.map((row) =>
+          row.id === customerId ? { ...row, steak_credits_enabled: nextEnabled } : row
+        )
+      );
+      setSelectedCustomerDetail((prev) =>
+        prev && prev.customer.id === customerId
+          ? {
+              ...prev,
+              customer: {
+                ...prev.customer,
+                steak_credits_enabled: nextEnabled,
+              },
+            }
+          : prev
+      );
+      if (authUserId) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("customer_id")
+          .eq("id", authUserId)
+          .maybeSingle();
+        const linkedCustomerId = data?.customer_id ? String(data.customer_id) : "";
+        if (linkedCustomerId === customerId) {
+          setSteakCreditsEnabled(nextEnabled);
+          const linkedDetail =
+            selectedCustomerDetail?.customer.id === customerId ? selectedCustomerDetail.customer : null;
+          if (linkedDetail) {
+            setAvailableSteakCredits(
+              Math.max(0, Number(linkedDetail.available_steak_credits ?? 0))
+            );
+          }
+        }
+      }
+    },
+    [authUserId, selectedCustomerDetail]
+  );
+
+  const handleSaveCustomerEmail = React.useCallback(
+    async (customerId: string, email: string) => {
+      const fallbackCustomer = await fetchCustomerById(customerId);
+      const sourceCustomer =
+        selectedCustomerDetail?.customer.id === customerId
+          ? selectedCustomerDetail.customer
+          : fallbackCustomer;
+      if (!sourceCustomer) {
+        throw new Error("Customer not found.");
+      }
+
+      const nextCustomer = await updateCustomerRecord(customerId, {
+        firstName: sourceCustomer.first_name,
+        lastName: sourceCustomer.last_name,
+        fullName: sourceCustomer.full_name,
+        phone: sourceCustomer.phone,
+        email,
+        address: sourceCustomer.address,
+        notes: sourceCustomer.notes,
+      });
+
+      setAllCustomers((prev) =>
+        prev.map((row) =>
+          row.id === customerId
+            ? {
+                ...row,
+                email: nextCustomer.email,
+              }
+            : row
+        )
+      );
+      setSelectedCustomerDetail((prev) =>
+        prev && prev.customer.id === customerId
+          ? {
+              ...prev,
+              customer: nextCustomer,
+            }
+          : prev
+      );
+
+      if (authUserId) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("customer_id")
+          .eq("id", authUserId)
+          .maybeSingle();
+        const linkedCustomerId = data?.customer_id ? String(data.customer_id) : "";
+        if (linkedCustomerId === customerId) {
+          setAuthEmail(String(nextCustomer.email ?? ""));
+        }
+      }
+    },
+    [authUserId, selectedCustomerDetail]
+  );
+
+  const handleSaveCustomerProfile = React.useCallback(
+    async (
+      customerId: string,
+      input: {
+        firstName: string;
+        lastName: string;
+        fullName: string;
+        phone: string;
+        address: string;
+        notes: string;
+      }
+    ) => {
+      const fallbackCustomer = await fetchCustomerById(customerId);
+      const sourceCustomer =
+        selectedCustomerDetail?.customer.id === customerId
+          ? selectedCustomerDetail.customer
+          : fallbackCustomer;
+      if (!sourceCustomer) {
+        throw new Error("Customer not found.");
+      }
+
+      const nextCustomer = await updateCustomerRecord(customerId, {
+        firstName: input.firstName,
+        lastName: input.lastName,
+        fullName: input.fullName,
+        phone: input.phone,
+        email: sourceCustomer.email,
+        address: input.address,
+        notes: input.notes,
+      });
+
+      setAllCustomers((prev) =>
+        prev.map((row) =>
+          row.id === customerId
+            ? {
+                ...row,
+                customer_name: nextCustomer.full_name,
+                email: nextCustomer.email,
+              }
+            : row
+        )
+      );
+      setSelectedCustomerDetail((prev) =>
+        prev && prev.customer.id === customerId
+          ? {
+              ...prev,
+              customer: nextCustomer,
+            }
+          : prev
+      );
+    },
+    [selectedCustomerDetail]
+  );
+
+  const handleBulkSetCustomerSteakCreditsEnabled = React.useCallback(
+    async (customerIds: string[], enabled: boolean) => {
+      const ids = Array.from(new Set(customerIds.filter(Boolean)));
+      if (ids.length < 2) return;
+      await Promise.all(ids.map((customerId) => updateCustomerSteakCreditsEnabled(customerId, enabled)));
+      setAllCustomers((prev) =>
+        prev.map((row) =>
+          ids.includes(row.id) ? { ...row, steak_credits_enabled: enabled } : row
+        )
+      );
+      setSelectedCustomerDetail((prev) =>
+        prev && ids.includes(prev.customer.id)
+          ? {
+              ...prev,
+              customer: {
+                ...prev.customer,
+                steak_credits_enabled: enabled,
+              },
+            }
+          : prev
+      );
+      if (authUserId) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("customer_id")
+          .eq("id", authUserId)
+          .maybeSingle();
+        const linkedCustomerId = data?.customer_id ? String(data.customer_id) : "";
+        if (linkedCustomerId && ids.includes(linkedCustomerId)) {
+          setSteakCreditsEnabled(enabled);
+          const linkedCustomer = await fetchCustomerById(linkedCustomerId).catch(() => null);
+          setAvailableSteakCredits(
+            Math.max(0, Number(linkedCustomer?.available_steak_credits ?? 0))
+          );
+        }
+      }
+    },
+    [authUserId]
+  );
 
   const loadAndSelectCustomer = React.useCallback(async (customerId: string) => {
     setLoadingCustomerDetail(true);
     setSelectedCustomerId(customerId);
     setSelectedCustomerDetail(null);
     try {
+      if (adminProfiles.length === 0) {
+        const profiles = await fetchAdminProfilesForCustomerLink();
+        setAdminProfiles(profiles);
+      }
       const detail = await fetchAdminCustomerDetail(customerId);
       setSelectedCustomerDetail(detail);
       return detail;
@@ -2982,7 +3353,143 @@ React.useEffect(() => {
     } finally {
       setLoadingCustomerDetail(false);
     }
-  }, []);
+  }, [adminProfiles.length]);
+
+  const refreshLinkedCustomerCreditsState = React.useCallback(async () => {
+    if (!authUserId) {
+      setSteakCreditsEnabled(false);
+      setAvailableSteakCredits(0);
+      return;
+    }
+    const { data } = await supabase
+      .from("profiles")
+      .select("customer_id")
+      .eq("id", authUserId)
+      .maybeSingle();
+    const linkedCustomerId = data?.customer_id ? String(data.customer_id) : "";
+    if (!linkedCustomerId) {
+      setSteakCreditsEnabled(false);
+      setAvailableSteakCredits(0);
+      return;
+    }
+    const linkedCustomer = await fetchCustomerById(linkedCustomerId).catch(() => null);
+    setSteakCreditsEnabled(Boolean(linkedCustomer?.steak_credits_enabled));
+    setAvailableSteakCredits(Math.max(0, Number(linkedCustomer?.available_steak_credits ?? 0)));
+  }, [authUserId]);
+
+  const handleDeleteCustomer = React.useCallback(
+    async (customerId: string) => {
+      await deleteCustomerById(customerId);
+      setAllCustomers((prev) => prev.filter((row) => row.id !== customerId));
+      try {
+        await refreshAdminCustomers();
+      } catch (error) {
+        console.error("Failed to refresh customers after delete", error);
+      }
+      await refreshLinkedCustomerCreditsState();
+      setSelectedCustomerDetail(null);
+      setSelectedCustomerId(null);
+      openAllCustomersDrawer({ skipNavigate: false });
+    },
+    [openAllCustomersDrawer, refreshAdminCustomers, refreshLinkedCustomerCreditsState]
+  );
+
+  const handleDeleteUser = React.useCallback(
+    async (profileId: string, customerId: string) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const accessToken = String(session?.access_token ?? "").trim();
+      if (!accessToken) {
+        throw new Error("Missing admin session.");
+      }
+
+      const response = await fetch("/api/admin/delete-user", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ profileId }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error || "Failed to delete user.");
+      }
+
+      await refreshAdminCustomers();
+      await refreshLinkedCustomerCreditsState();
+      await loadAndSelectCustomer(customerId);
+    },
+    [loadAndSelectCustomer, refreshAdminCustomers, refreshLinkedCustomerCreditsState]
+  );
+
+  const handleLinkCustomerToProfile = React.useCallback(
+    async (customerId: string, profileId: string) => {
+      const targetProfile = adminProfiles.find((profile) => profile.id === profileId) ?? null;
+      if (!targetProfile) {
+        throw new Error("User not found.");
+      }
+
+      const existingCustomerId = targetProfile.customer_id ? String(targetProfile.customer_id) : "";
+      if (existingCustomerId && existingCustomerId !== customerId) {
+        await mergeCustomers(existingCustomerId, customerId);
+        await refreshAdminCustomers();
+        await refreshLinkedCustomerCreditsState();
+        pushAppRoute(`/customer?id=${encodeURIComponent(existingCustomerId)}`);
+        await loadAndSelectCustomer(existingCustomerId);
+        return;
+      }
+
+      await linkProfileToCustomer(profileId, customerId);
+      await refreshAdminCustomers();
+      await refreshLinkedCustomerCreditsState();
+      await loadAndSelectCustomer(customerId);
+    },
+    [
+      adminProfiles,
+      loadAndSelectCustomer,
+      pushAppRoute,
+      refreshAdminCustomers,
+      refreshLinkedCustomerCreditsState,
+    ]
+  );
+
+  const handleCombineCustomers = React.useCallback(
+    async (currentCustomerId: string, otherCustomerId: string) => {
+      if (!otherCustomerId || otherCustomerId === currentCustomerId) return;
+
+      const currentDetail =
+        selectedCustomerDetail?.customer.id === currentCustomerId
+          ? selectedCustomerDetail
+          : await fetchAdminCustomerDetail(currentCustomerId);
+      const otherDetail = await fetchAdminCustomerDetail(otherCustomerId);
+      if (!currentDetail || !otherDetail) {
+        throw new Error("Customer not found.");
+      }
+
+      const keepCurrent = !(otherDetail.has_account && !currentDetail.has_account);
+      const keepDetail = keepCurrent ? currentDetail : otherDetail;
+      const removeDetail = keepCurrent ? otherDetail : currentDetail;
+      const keepCustomer = keepDetail.customer;
+      const removeCustomer = removeDetail.customer;
+      await mergeCustomers(keepCustomer.id, removeCustomer.id);
+      await refreshAdminCustomers();
+      await refreshLinkedCustomerCreditsState();
+      pushAppRoute(`/customer?id=${encodeURIComponent(keepCustomer.id)}`);
+      await loadAndSelectCustomer(keepCustomer.id);
+    },
+    [
+      loadAndSelectCustomer,
+      pushAppRoute,
+      refreshAdminCustomers,
+      refreshLinkedCustomerCreditsState,
+      selectedCustomerDetail,
+    ]
+  );
 
   const openCustomerDetailDrawer = React.useCallback(
     (customerId: string, opts?: { skipNavigate?: boolean }) => {
@@ -3444,6 +3951,7 @@ React.useEffect(() => {
     if (analyticsOpen) return "/analytics";
     if (allReviewsOpen) return "/reviews";
     if (allCustomersOpen) return "/customers";
+    if (loyaltyProgramsOpen) return "/loyalty-programs";
     if (allPurchasesOpen) return "/allpurchases";
     if (allOrdersOpen) return "/allorders";
     if (myReviewsOpen) return "/myreviews";
@@ -3456,6 +3964,7 @@ React.useEffect(() => {
     analyticsOpen,
     allCustomersOpen,
     allReviewsOpen,
+    loyaltyProgramsOpen,
     allPurchasesOpen,
     allOrdersOpen,
     detailsOpen,
@@ -3668,6 +4177,11 @@ React.useEffect(() => {
           openAllCustomersDrawer({ skipNavigate: true });
           return;
         }
+        if (path === "/loyalty-programs") {
+          if (!requireAdmin({ path, search })) return;
+          openLoyaltyProgramsDrawer({ skipNavigate: true });
+          return;
+        }
         if (path === "/reviews") {
           if (!requireAdmin({ path, search })) return;
           openAllReviewsDrawer({ skipNavigate: true });
@@ -3716,6 +4230,7 @@ React.useEffect(() => {
       loadAndSelectCustomer,
       loadAndSelectPurchase,
       openAllCustomersDrawer,
+      openLoyaltyProgramsDrawer,
       openAllPurchasesDrawer,
       openAllOrdersDrawer,
       openAllProductsView,
@@ -4038,6 +4553,15 @@ React.useEffect(() => {
     );
     if (profileError) throw profileError;
 
+    const signupCustomer = await ensureCustomerForAccountSignup({
+      email,
+      firstName: firstName || null,
+      lastName: lastName || null,
+      fullName: customer.full_name.trim() || email,
+      phone: customer.phone.trim() || null,
+    });
+    await linkProfileToCustomer(authUser.id, signupCustomer.id);
+
     return authUser;
   }, [
     createAccountPassword,
@@ -4064,6 +4588,7 @@ React.useEffect(() => {
       data: { user: authUser },
     } = await supabase.auth.getUser();
     let user = authUser;
+    let linkedCheckoutCustomerId: string | null = null;
 
     if (!user?.id && createAccountFromDetails) {
       try {
@@ -4074,6 +4599,17 @@ React.useEffect(() => {
         alert(message);
         return;
       }
+    }
+
+    if (user?.id && !customer.placed_for_someone_else) {
+      const { data: linkedProfile } = await supabase
+        .from("profiles")
+        .select("customer_id")
+        .eq("id", user.id)
+        .maybeSingle();
+      linkedCheckoutCustomerId = linkedProfile?.customer_id
+        ? String(linkedProfile.customer_id)
+        : null;
     }
 
     const ext = paymentFile.name.includes(".")
@@ -4176,6 +4712,7 @@ React.useEffect(() => {
 
       const v2 = await supabase.rpc("checkout_cart_v2", {
         p_session_id: sid,
+        p_customer_id: linkedCheckoutCustomerId,
         p_full_name: checkoutFullName,
         p_email: customerEmail,
         p_phone: customer.phone,
@@ -4189,6 +4726,7 @@ React.useEffect(() => {
         p_subtotal: payload.subtotal,
         p_delivery_fee: payload.delivery_fee,
         p_thermal_bag_fee: payload.thermal_bag_fee,
+        p_steak_credits_applied: payload.steak_credits_applied,
         p_total: payload.total,
         p_payment_proof_url: path,
       });
@@ -4340,6 +4878,11 @@ React.useEffect(() => {
           .eq("id", orderId);
         if (creditsError) {
           console.warn("[checkout] steak credits preview update failed:", creditsError.message);
+        }
+        if (payload.steak_credits_applied > 0) {
+          setAvailableSteakCredits((prev) =>
+            Math.max(0, Number(prev) - Number(payload.steak_credits_applied))
+          );
         }
       }
       try {
@@ -5062,6 +5605,8 @@ React.useEffect(() => {
         setCustomer={handleSetCustomer}
         isAdmin={isAdmin}
         isLoggedIn={!!authUserId}
+        steakCreditsEnabled={steakCreditsEnabled}
+        availableSteakCredits={availableSteakCredits}
         createAccountFromDetails={createAccountFromDetails}
         setCreateAccountFromDetails={(next) => {
           setCreateAccountFromDetails(next);
@@ -5104,6 +5649,8 @@ React.useEffect(() => {
         isOpen={cartOpen}
         items={cartItemsForDisplay}
         subtotal={subtotal}
+        steakCreditsEnabled={steakCreditsEnabled}
+        availableSteakCredits={availableSteakCredits}
         backgroundStyle={mainZoneStyle}
         onClose={closeCart}
         onOpenProduct={handleCartOpenProduct as (id: string) => void}
@@ -5125,6 +5672,7 @@ React.useEffect(() => {
         isOpen={detailsOpen}
         topOffset={topOffset}
         userId={authUserId}
+        steakCreditsEnabled={steakCreditsEnabled}
         backgroundStyle={mainZoneStyle}
         onClose={() => goBackDrawer("/shop")}
         onProfileSaved={(firstName) => {
@@ -5213,6 +5761,7 @@ React.useEffect(() => {
         topOffset={topOffset}
         customers={allCustomers}
         onOpenCustomer={openCustomerDetailDrawer}
+        onBulkSetSteakCreditsEnabled={handleBulkSetCustomerSteakCreditsEnabled}
         backgroundStyle={mainZoneStyle}
         onClose={() => {
           goBackDrawer("/shop");
@@ -5226,6 +5775,16 @@ React.useEffect(() => {
         loading={loadingCustomerDetail}
         backgroundStyle={mainZoneStyle}
         onAdjustCredits={handleAdjustCustomerCredits}
+        onToggleSteakCreditsEnabled={handleToggleCustomerSteakCreditsEnabled}
+        onSaveCustomerProfile={handleSaveCustomerProfile}
+        onSaveCustomerEmail={handleSaveCustomerEmail}
+        profiles={adminProfiles}
+        customers={allCustomers}
+        deleteUserAvailable={deleteUserAvailable}
+        onDeleteCustomer={handleDeleteCustomer}
+        onDeleteUser={handleDeleteUser}
+        onLinkCustomerToProfile={handleLinkCustomerToProfile}
+        onCombineCustomer={handleCombineCustomers}
         onBack={() => {
           setSelectedCustomerDetail(null);
           setSelectedCustomerId(null);

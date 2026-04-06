@@ -22,6 +22,7 @@ export type CheckoutSubmitPayload = {
   subtotal: number;
   delivery_fee: number;
   thermal_bag_fee: number;
+  steak_credits_applied: number;
   total: number;
   postal_code: string;
   delivery_date: string;

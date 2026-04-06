@@ -8,7 +8,11 @@ type SendOrderEmailPayload = {
   origin?: string | null;
 };
 
-const DEFAULT_ADMIN_CC = ["uzziel.sanjuan@gmail.com", "adriel.sanjuan@gmail.com"];
+const DEFAULT_ADMIN_BCC = [
+  "uzziel.sanjuan@gmail.com",
+  "jeandeferaudy@gmail.com",
+  "adriel.sanjuan1@gmail.com",
+];
 
 export async function POST(req: Request) {
   try {
@@ -29,16 +33,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Missing RESEND_API_KEY." }, { status: 500 });
     }
 
-    const origin = String(body.origin ?? "").trim() || "https://tastyprotein.vercel.app";
+    const origin =
+      String(body.origin ?? "").trim() || "https://www.thesteakkitchenph.com";
     const orderNumber = String(body.orderNumber ?? "").trim();
     const orderLabel = orderNumber ? `Order ${orderNumber}` : "Your order";
     const orderUrl = `${origin.replace(/\/$/, "")}/order?id=${encodeURIComponent(orderId)}`;
     const displayName = String(body.name ?? "").trim() || "there";
-    const adminCcEnv = String(process.env.ADMIN_CC_EMAILS ?? "")
+    const adminBccEnv = String(process.env.ADMIN_BCC_EMAILS ?? "")
       .split(",")
       .map((v) => v.trim())
       .filter(Boolean);
-    const adminCc = adminCcEnv.length ? adminCcEnv : DEFAULT_ADMIN_CC;
+    const adminBcc = adminBccEnv.length ? adminBccEnv : DEFAULT_ADMIN_BCC;
 
     const html = `
       <div style="font-family: Arial, sans-serif; color: #111;">
@@ -48,7 +53,7 @@ export async function POST(req: Request) {
         <p>You can view your order summary anytime using this link:</p>
         <p><a href="${orderUrl}">${orderUrl}</a></p>
         <p>If you have any questions, reply to this email and our team will help you.</p>
-        <p>— Tasty Protein</p>
+        <p>— The Steak Kitchen</p>
       </div>
     `;
 
@@ -61,7 +66,7 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         from,
         to: email,
-        cc: adminCc,
+        bcc: adminBcc,
         subject: `${orderLabel} has been placed`,
         html,
       }),

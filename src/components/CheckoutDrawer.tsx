@@ -62,6 +62,8 @@ type Props = {
   setCustomer: (next: CustomerDraft) => void;
   isAdmin?: boolean;
   isLoggedIn?: boolean;
+  steakCreditsEnabled?: boolean;
+  availableSteakCredits?: number;
   createAccountFromDetails?: boolean;
   setCreateAccountFromDetails?: (next: boolean) => void;
   createAccountPassword?: string;
@@ -106,6 +108,8 @@ export default function CheckoutDrawer({
   setCustomer,
   isAdmin = false,
   isLoggedIn = false,
+  steakCreditsEnabled = false,
+  availableSteakCredits = 0,
   createAccountFromDetails = false,
   setCreateAccountFromDetails,
   createAccountPassword = "",
@@ -392,9 +396,18 @@ export default function CheckoutDrawer({
       : selectedDeliveryRule.delivery_fee_below_min_php;
   const referBagFee = customer.add_refer_bag ? 200 : 0;
   const grandTotal = computedTotal + deliveryFee + referBagFee;
-  const displayedTotal = checkoutStep === 1 ? computedTotal : grandTotal;
   const hasOutOfStockItems = summaryLines.some((li: any) => Boolean(li?.outOfStock));
   const isOnBehalfMode = Boolean(isAdmin && customer.placed_for_someone_else);
+  const canApplySteakCredits = isLoggedIn && steakCreditsEnabled && !isOnBehalfMode;
+  const summaryCreditsBase = checkoutStep === 1 ? computedTotal : grandTotal;
+  const steakCreditsApplied = canApplySteakCredits
+    ? Math.min(Math.max(0, Number(availableSteakCredits) || 0), Math.max(0, summaryCreditsBase))
+    : 0;
+  const payableSteakCreditsApplied = canApplySteakCredits
+    ? Math.min(Math.max(0, Number(availableSteakCredits) || 0), Math.max(0, grandTotal))
+    : 0;
+  const payableTotal = Math.max(0, grandTotal - payableSteakCreditsApplied);
+  const displayedTotal = Math.max(0, summaryCreditsBase - steakCreditsApplied);
   const requiresDirectContactDetails = !isOnBehalfMode;
   const hasValidEmail =
     customer.email.trim().length === 0
@@ -796,7 +809,7 @@ export default function CheckoutDrawer({
                 : styles.qrAmount
             }
           >
-            ₱ {formatMoney(grandTotal)}
+            ₱ {formatMoney(payableTotal)}
           </div>
           <div style={{ ...styles.uploadBlock, ...(isMobileViewport ? styles.uploadBlockMobile : null) }}>
             <label
@@ -1053,6 +1066,21 @@ export default function CheckoutDrawer({
                     </div>
                   ) : null}
 
+                  {steakCreditsApplied > 0 ? (
+                    <div
+                      style={{
+                        ...styles.summaryTotalRow,
+                        ...styles.summaryTotalRowNoLine,
+                        ...styles.summaryIndentedRow,
+                      }}
+                    >
+                      <div style={styles.summaryMinorLabel}>Steak Credits Applied</div>
+                      <div style={{ ...styles.summaryMinorValue, color: "var(--tp-accent)" }}>
+                        - ₱ {formatMoney(steakCreditsApplied)}
+                      </div>
+                    </div>
+                  ) : null}
+
                     <div style={styles.summaryShortDivider} />
                   <div
                     style={{
@@ -1065,7 +1093,7 @@ export default function CheckoutDrawer({
                       ₱ {formatMoney(displayedTotal)}
                     </div>
                   </div>
-                  {isLoggedIn ? (
+                  {isLoggedIn && steakCreditsEnabled ? (
                     <div style={{ ...styles.steakCreditsSummary, ...styles.summaryIndentedBlock }}>
                       This order earns you {formatCurrencyPHP(steakCreditsEstimate)} in Steak Credits.
                     </div>
@@ -1528,7 +1556,7 @@ export default function CheckoutDrawer({
                 </div>
                 </div>
 
-	                {!isLoggedIn && setCreateAccountFromDetails ? (
+	                {!isLoggedIn && steakCreditsEnabled && setCreateAccountFromDetails ? (
                   <div style={styles.steakCreditsBox}>
                     <label style={styles.steakCreditsBoxRow}>
                       <input
@@ -1905,7 +1933,8 @@ export default function CheckoutDrawer({
                           subtotal: computedTotal,
                           delivery_fee: deliveryFee,
                           thermal_bag_fee: referBagFee,
-                          total: grandTotal,
+                          steak_credits_applied: payableSteakCreditsApplied,
+                          total: payableTotal,
                           postal_code: customer.postal_code,
                           delivery_date: customer.delivery_date,
                           delivery_slot: customer.delivery_slot,

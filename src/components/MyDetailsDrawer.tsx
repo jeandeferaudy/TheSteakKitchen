@@ -9,8 +9,10 @@ import {
 import {
   composeCustomerFullName,
   ensureCustomerRecord,
+  findCustomerByEmail,
   fetchCustomerById,
   linkProfileToCustomer,
+  updateCustomerRecord,
 } from "@/lib/customersApi";
 import { formatCurrencyPHP } from "@/lib/money";
 import { supabase } from "@/lib/supabase";
@@ -19,6 +21,7 @@ type Props = {
   isOpen: boolean;
   topOffset: number;
   userId: string | null;
+  steakCreditsEnabled?: boolean;
   backgroundStyle?: React.CSSProperties;
   onClose: () => void;
   onProfileSaved?: (firstName: string) => void;
@@ -58,6 +61,7 @@ export default function MyDetailsDrawer({
   isOpen,
   topOffset,
   userId,
+  steakCreditsEnabled: steakCreditsEnabledProp,
   backgroundStyle,
   onClose,
   onProfileSaved,
@@ -69,7 +73,9 @@ export default function MyDetailsDrawer({
   const [error, setError] = React.useState("");
   const [hasLoaded, setHasLoaded] = React.useState(false);
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
+  const [email, setEmail] = React.useState("");
   const [availableSteakCredits, setAvailableSteakCredits] = React.useState(0);
+  const [steakCreditsEnabled, setSteakCreditsEnabled] = React.useState(false);
   const [linkedCustomerId, setLinkedCustomerId] = React.useState<string | null>(null);
   const lastSavedRef = React.useRef<string>("");
 
@@ -106,8 +112,10 @@ export default function MyDetailsDrawer({
       if (profileError) {
         setError(profileError.message);
         setDraft(EMPTY_DRAFT);
+        setEmail("");
         setLinkedCustomerId(null);
         setAvailableSteakCredits(0);
+        setSteakCreditsEnabled(false);
         setLoading(false);
         return;
       }
@@ -127,17 +135,41 @@ export default function MyDetailsDrawer({
         country: "Philippines",
       });
       const customerId = data?.customer_id ? String(data.customer_id) : null;
-      setLinkedCustomerId(customerId);
-      if (customerId) {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const authEmailKey = String(user?.email ?? "").trim().toLowerCase();
+      let resolvedCustomerId = customerId;
+      let resolvedCustomer = customerId
+        ? await fetchCustomerById(customerId).catch(() => null)
+        : null;
+      const linkedEmailKey = String(resolvedCustomer?.email ?? "").trim().toLowerCase();
+      if (authEmailKey && authEmailKey !== linkedEmailKey) {
+        const emailMatchedCustomer = await findCustomerByEmail(user?.email ?? null).catch(() => null);
+        if (emailMatchedCustomer && emailMatchedCustomer.id !== resolvedCustomer?.id) {
+          resolvedCustomer = emailMatchedCustomer;
+          resolvedCustomerId = emailMatchedCustomer.id;
+          await linkProfileToCustomer(userId, emailMatchedCustomer.id).catch(() => null);
+        }
+      }
+      setLinkedCustomerId(resolvedCustomerId);
+      if (resolvedCustomer) {
         try {
-          const customer = await fetchCustomerById(customerId);
-          setAvailableSteakCredits(Math.max(0, Number(customer?.available_steak_credits ?? 0)));
+          setEmail(String(user?.email ?? resolvedCustomer?.email ?? "").trim());
+          setAvailableSteakCredits(
+            Math.max(0, Number(resolvedCustomer?.available_steak_credits ?? 0))
+          );
+          setSteakCreditsEnabled(Boolean(resolvedCustomer?.steak_credits_enabled));
         } catch (customerError) {
           console.error("Failed to load linked customer credits", customerError);
+          setEmail(String(user?.email ?? "").trim());
           setAvailableSteakCredits(0);
+          setSteakCreditsEnabled(false);
         }
       } else {
+        setEmail(String(user?.email ?? "").trim());
         setAvailableSteakCredits(0);
+        setSteakCreditsEnabled(false);
       }
       const loadedFirstName = String(data?.first_name ?? "").trim();
       if (loadedFirstName && onProfileSaved) {
@@ -179,6 +211,10 @@ export default function MyDetailsDrawer({
     : isMobileViewport
       ? { ...styles.fieldRowMobileAligned, alignItems: "start" }
       : styles.fieldRowMobile;
+  const showSteakCredits =
+    typeof steakCreditsEnabledProp === "boolean"
+      ? steakCreditsEnabledProp
+      : steakCreditsEnabled;
 
   const setField = (k: keyof Draft, v: string) => {
     setSaved(false);
@@ -236,7 +272,7 @@ export default function MyDetailsDrawer({
           setLoading(false);
           return;
         }
-        const customer = await ensureCustomerRecord({
+        const nextCustomerInput = {
           firstName: draft.first_name,
           lastName: draft.last_name,
           fullName: composedFullName,
@@ -256,12 +292,17 @@ export default function MyDetailsDrawer({
             .filter(Boolean)
             .join(", "),
           notes: draft.delivery_note,
-        });
+        };
+        const customer = linkedCustomerId
+          ? await updateCustomerRecord(linkedCustomerId, nextCustomerInput)
+          : await ensureCustomerRecord(nextCustomerInput);
         if (customer.id !== linkedCustomerId) {
           await linkProfileToCustomer(userId, customer.id);
           setLinkedCustomerId(customer.id);
         }
+        setEmail(String(user?.email ?? customer.email ?? "").trim());
         setAvailableSteakCredits(Math.max(0, customer.available_steak_credits));
+        setSteakCreditsEnabled(Boolean(customer.steak_credits_enabled));
       } catch (customerError) {
         setError(
           customerError instanceof Error
@@ -324,14 +365,16 @@ export default function MyDetailsDrawer({
             ...(isMobileViewport ? styles.contentMobile : null),
           }}
         >
-          <div style={styles.creditsCard}>
-            <div style={styles.creditsRow}>
-              <div style={styles.creditsTitle}>
-                Available Steak Credits: {formatCurrencyPHP(availableSteakCredits)}
+          {showSteakCredits ? (
+            <div style={styles.creditsCard}>
+              <div style={styles.creditsRow}>
+                <div style={styles.creditsTitle}>
+                  Available Steak Credits: {formatCurrencyPHP(availableSteakCredits)}
+                </div>
+                <div style={styles.creditsSubtext}>Available to use for your next order.</div>
               </div>
-              <div style={styles.creditsSubtext}>Available to use for your next order.</div>
             </div>
-          </div>
+          ) : null}
           <div style={styles.card}>
             <div style={{ ...styles.row2, ...(isMobileViewport ? styles.row2Mobile : null) }}>
               <div style={rowStyle}>
@@ -354,6 +397,11 @@ export default function MyDetailsDrawer({
                   onKeyDown={handleEnterCommit}
                 />
               </div>
+            </div>
+
+            <div style={rowStyle}>
+              <label style={labelStyle}>Email</label>
+              <div style={styles.readOnlyValue}>{email || "-"}</div>
             </div>
 
             <div style={styles.addressSectionLabel}>Delivery address:</div>
@@ -652,6 +700,15 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--tp-control-bg-soft)",
     color: "var(--tp-text-color)",
     padding: "0 15px",
+  },
+  readOnlyValue: {
+    minHeight: 40,
+    display: "flex",
+    alignItems: "center",
+    color: "var(--tp-text-color)",
+    opacity: 0.9,
+    lineHeight: 1.35,
+    wordBreak: "break-word",
   },
   textarea: {
     width: "100%",

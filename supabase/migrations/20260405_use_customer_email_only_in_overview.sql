@@ -1,0 +1,60 @@
+drop function if exists public.tp_admin_customer_overview();
+
+create function public.tp_admin_customer_overview()
+returns table (
+  id uuid,
+  customer_name text,
+  email text,
+  has_account boolean,
+  order_count bigint,
+  total_ordered numeric,
+  current_credits numeric,
+  steak_credits_enabled boolean
+)
+language sql
+security definer
+set search_path = public
+as $$
+  with latest_order as (
+    select distinct on (o.customer_id)
+      o.customer_id,
+      nullif(trim(coalesce(o.email, '')), '') as order_email
+    from public.orders o
+    where o.customer_id is not null
+    order by o.customer_id, o.created_at desc
+  ),
+  order_agg as (
+    select
+      o.customer_id,
+      count(*)::bigint as order_count,
+      coalesce(sum(coalesce(o.total_selling_price, 0)), 0)::numeric as total_ordered,
+      bool_or(o.user_id is not null) as has_account
+    from public.orders o
+    where o.customer_id is not null
+    group by o.customer_id
+  )
+  select
+    c.id,
+    nullif(trim(c.full_name), '') as customer_name,
+    nullif(trim(coalesce(c.email, '')), '') as email,
+    coalesce(oa.has_account, false) as has_account,
+    coalesce(oa.order_count, 0)::bigint as order_count,
+    coalesce(oa.total_ordered, 0)::numeric as total_ordered,
+    coalesce(c.available_steak_credits, 0)::numeric as current_credits,
+    coalesce(c.steak_credits_enabled, false) as steak_credits_enabled
+  from public.customers c
+  left join latest_order lo on lo.customer_id = c.id
+  left join order_agg oa on oa.customer_id = c.id
+  where public.tp_is_admin()
+  order by lower(
+    coalesce(
+      nullif(trim(c.full_name), ''),
+      nullif(trim(c.email), ''),
+      lo.order_email,
+      c.id::text
+    )
+  );
+$$;
+
+revoke all on function public.tp_admin_customer_overview() from public;
+grant execute on function public.tp_admin_customer_overview() to authenticated;

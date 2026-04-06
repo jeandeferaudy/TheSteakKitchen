@@ -831,6 +831,48 @@ export async function deleteOrderByAdmin(
   const asError = (e: unknown) =>
     e instanceof Error ? e : new Error(typeof e === "string" ? e : JSON.stringify(e));
 
+  const { data: packedLines, error: packedLinesError } = await supabase
+    .from("order_lines")
+    .select("product_id,packed_qty")
+    .eq("order_id", orderId);
+  if (packedLinesError) throw asError(packedLinesError.message ?? packedLinesError);
+
+  const packedByProduct = new Map<string, number>();
+  for (const row of (packedLines ?? []) as Array<Record<string, unknown>>) {
+    const productId = String(row.product_id ?? "");
+    const packedQty = Math.max(0, Math.floor(Number(row.packed_qty ?? 0)));
+    if (!productId || packedQty <= 0) continue;
+    packedByProduct.set(productId, (packedByProduct.get(productId) ?? 0) + packedQty);
+  }
+
+  if (packedByProduct.size > 0) {
+    const productIds = [...packedByProduct.keys()];
+    const { data: inventoryRows, error: inventoryError } = await supabase
+      .from("inventory")
+      .select("product_id,qty_on_hand")
+      .in("product_id", productIds);
+    if (inventoryError) throw asError(inventoryError.message ?? inventoryError);
+
+    const qtyOnHandByProduct = new Map<string, number>();
+    for (const row of (inventoryRows ?? []) as Array<Record<string, unknown>>) {
+      const productId = String(row.product_id ?? "");
+      if (!productId) continue;
+      qtyOnHandByProduct.set(productId, Math.max(0, Number(row.qty_on_hand ?? 0)));
+    }
+
+    const inventoryPayload = productIds.map((productId) => ({
+      product_id: productId,
+      qty_on_hand:
+        Math.max(0, qtyOnHandByProduct.get(productId) ?? 0) +
+        Math.max(0, packedByProduct.get(productId) ?? 0),
+    }));
+
+    const { error: restockError } = await supabase
+      .from("inventory")
+      .upsert(inventoryPayload, { onConflict: "product_id" });
+    if (restockError) throw asError(restockError.message ?? restockError);
+  }
+
   const { error: deleteOrderLinesError } = await supabase
     .from("order_lines")
     .delete()

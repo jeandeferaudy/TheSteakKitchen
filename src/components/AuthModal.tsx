@@ -1,6 +1,10 @@
 "use client";
 
 import * as React from "react";
+import {
+  ensureCustomerForAccountSignup,
+  linkProfileToCustomer,
+} from "@/lib/customersApi";
 import { supabase } from "@/lib/supabase";
 import { AppButton, TOPBAR_FONT_SIZE } from "@/components/ui";
 
@@ -213,7 +217,7 @@ export default function AuthModal({ isOpen, onClose, recoveryNonce = 0 }: Props)
         throw new Error("Please complete the captcha.");
       }
       const redirectTo = getAuthEmailRedirectTo();
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
         options: {
@@ -233,6 +237,17 @@ export default function AuthModal({ isOpen, onClose, recoveryNonce = 0 }: Props)
           );
         }
         throw error;
+      }
+      const newUserId = data.user?.id ? String(data.user.id) : "";
+      if (newUserId) {
+        const customerRecord = await ensureCustomerForAccountSignup({
+          email: email.trim(),
+          fullName: email.trim(),
+        });
+        await supabase
+          .from("profiles")
+          .upsert({ id: newUserId, customer_id: customerRecord.id }, { onConflict: "id" });
+        await linkProfileToCustomer(newUserId, customerRecord.id).catch(() => null);
       }
       setMsg("Account created. Check your email to confirm.");
     } catch (e: unknown) {

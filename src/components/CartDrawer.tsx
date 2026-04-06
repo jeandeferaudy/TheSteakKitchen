@@ -10,6 +10,8 @@ type Props = {
   isOpen: boolean;
   items: CartItem[];
   subtotal: number;
+  steakCreditsEnabled?: boolean;
+  availableSteakCredits?: number;
   backgroundStyle?: React.CSSProperties;
 
   onClose: () => void;
@@ -27,6 +29,8 @@ export default function CartDrawer({
   isOpen,
   items,
   subtotal,
+  steakCreditsEnabled = false,
+  availableSteakCredits = 0,
   backgroundStyle,
   onClose,
   onAdd,
@@ -60,6 +64,9 @@ export default function CartDrawer({
   }, []);
 
   const qtyCount = items.reduce((sum, i) => sum + Math.max(0, Number(i.qty) || 0), 0);
+  const steakCreditsApplied =
+    steakCreditsEnabled ? Math.min(Math.max(0, Number(availableSteakCredits) || 0), Math.max(0, subtotal)) : 0;
+  const totalAfterCredits = Math.max(0, subtotal - steakCreditsApplied);
   const hasOverLimitItems = items.some(
     (i) =>
       !Boolean(i.unlimitedStock) &&
@@ -294,6 +301,18 @@ export default function CartDrawer({
             <div style={{ opacity: 0.8 }}>Subtotal</div>
             <div style={styles.totalValue}>₱ {formatMoney(subtotal)}</div>
           </div>
+          {steakCreditsApplied > 0 ? (
+            <div style={styles.metaRow}>
+              <div style={{ opacity: 0.8 }}>Steak Credits Applied</div>
+              <div style={{ ...styles.metaValue, color: "var(--tp-accent)" }}>
+                - ₱ {formatMoney(steakCreditsApplied)}
+              </div>
+            </div>
+          ) : null}
+          <div style={styles.totalRow}>
+            <div style={{ opacity: 0.8 }}>Total</div>
+            <div style={styles.totalValue}>₱ {formatMoney(totalAfterCredits)}</div>
+          </div>
           {hasOverLimitItems ? (
             <div style={styles.warningBox}>
               You need to reduce some quantites in your cart.
@@ -512,21 +531,22 @@ const styles: Record<string, React.CSSProperties> = {
   footer: {
     padding: "16px 16px calc(20px + env(safe-area-inset-bottom, 0px))",
     borderTop: "1px solid var(--tp-border-color-soft)",
+    display: "grid",
+    gap: 10,
   },
   totalRow: {
     display: "flex",
     justifyContent: "space-between",
-    marginBottom: 12,
+    alignItems: "baseline",
   },
   metaRow: {
     display: "flex",
     justifyContent: "space-between",
-    marginBottom: 6,
+    alignItems: "baseline",
   },
   metaValue: { fontSize: 15, fontWeight: 600 },
   totalValue: { fontSize: 16, fontWeight: 900 },
   warningBox: {
-    marginBottom: 10,
     borderRadius: 10,
     border: "1px solid rgba(255,177,74,0.6)",
     background: "rgba(255,177,74,0.16)",

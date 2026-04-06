@@ -6,7 +6,11 @@ import {
   TOPBAR_FONT_SIZE,
   TOPBAR_FONT_SIZE_MOBILE,
 } from "@/components/ui";
-import type { CustomerAdminDetail } from "@/lib/customersApi";
+import type {
+  AdminProfileOption,
+  CustomerAdminDetail,
+  CustomerAdminItem,
+} from "@/lib/customersApi";
 
 const BACK_BTN_W = 68;
 const TITLE_GAP = 40;
@@ -20,6 +24,26 @@ type Props = {
   onBack: () => void;
   onOpenOrder: (orderId: string) => void;
   onAdjustCredits: (customerId: string, delta: number) => Promise<void> | void;
+  onToggleSteakCreditsEnabled: (customerId: string, enabled: boolean) => Promise<void> | void;
+  onSaveCustomerProfile: (
+    customerId: string,
+    input: {
+      firstName: string;
+      lastName: string;
+      fullName: string;
+      phone: string;
+      address: string;
+      notes: string;
+    }
+  ) => Promise<void> | void;
+  onSaveCustomerEmail: (customerId: string, email: string) => Promise<void> | void;
+  profiles: AdminProfileOption[];
+  customers: CustomerAdminItem[];
+  deleteUserAvailable?: boolean;
+  onDeleteCustomer: (customerId: string) => Promise<void> | void;
+  onDeleteUser: (profileId: string, customerId: string) => Promise<void> | void;
+  onLinkCustomerToProfile: (customerId: string, profileId: string) => Promise<void> | void;
+  onCombineCustomer: (customerId: string, otherCustomerId: string) => Promise<void> | void;
 };
 
 function fmtMoney(v: number) {
@@ -61,11 +85,40 @@ export default function CustomerDetailDrawer({
   onBack,
   onOpenOrder,
   onAdjustCredits,
+  onToggleSteakCreditsEnabled,
+  onSaveCustomerProfile,
+  onSaveCustomerEmail,
+  profiles,
+  customers,
+  deleteUserAvailable = false,
+  onDeleteCustomer,
+  onDeleteUser,
+  onLinkCustomerToProfile,
+  onCombineCustomer,
 }: Props) {
   const [search, setSearch] = React.useState("");
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
   const [creditDraft, setCreditDraft] = React.useState("");
+  const [emailDraft, setEmailDraft] = React.useState("");
+  const [profileEditorOpen, setProfileEditorOpen] = React.useState(false);
+  const [profileSaving, setProfileSaving] = React.useState(false);
+  const [profileDraft, setProfileDraft] = React.useState({
+    firstName: "",
+    lastName: "",
+    fullName: "",
+    phone: "",
+    address: "",
+    notes: "",
+  });
+  const [linkQuery, setLinkQuery] = React.useState("");
+  const [combineQuery, setCombineQuery] = React.useState("");
   const [creditSaving, setCreditSaving] = React.useState(false);
+  const [emailSaving, setEmailSaving] = React.useState(false);
+  const [creditsEnabledSaving, setCreditsEnabledSaving] = React.useState(false);
+  const [deleteSaving, setDeleteSaving] = React.useState(false);
+  const [deleteUserSaving, setDeleteUserSaving] = React.useState(false);
+  const [linkSaving, setLinkSaving] = React.useState(false);
+  const [combineSaving, setCombineSaving] = React.useState(false);
   const panelTop = Math.max(topOffset, 0);
   const panelHeight = `calc(100vh - ${panelTop}px)`;
 
@@ -78,8 +131,36 @@ export default function CustomerDetailDrawer({
 
   React.useEffect(() => {
     setCreditDraft("");
+    setEmailDraft(detail?.customer.email ?? "");
+    setProfileEditorOpen(false);
+    setProfileSaving(false);
+    setProfileDraft({
+      firstName: detail?.customer.first_name ?? "",
+      lastName: detail?.customer.last_name ?? "",
+      fullName: detail?.customer.full_name ?? "",
+      phone: detail?.customer.phone ?? "",
+      address: detail?.customer.address ?? "",
+      notes: detail?.customer.notes ?? "",
+    });
+    setLinkQuery("");
+    setCombineQuery("");
     setCreditSaving(false);
-  }, [detail?.customer.id]);
+    setEmailSaving(false);
+    setCreditsEnabledSaving(false);
+    setDeleteSaving(false);
+    setDeleteUserSaving(false);
+    setLinkSaving(false);
+    setCombineSaving(false);
+  }, [
+    detail?.customer.address,
+    detail?.customer.email,
+    detail?.customer.first_name,
+    detail?.customer.full_name,
+    detail?.customer.id,
+    detail?.customer.last_name,
+    detail?.customer.notes,
+    detail?.customer.phone,
+  ]);
 
   const filteredOrders = React.useMemo(() => {
     const rows = detail?.orders ?? [];
@@ -93,8 +174,6 @@ export default function CustomerDetailDrawer({
     });
   }, [detail?.orders, search]);
 
-  if (!isOpen) return null;
-
   const customerName =
     detail?.customer.full_name?.trim() ||
     [detail?.customer.first_name, detail?.customer.last_name].filter(Boolean).join(" ").trim() ||
@@ -106,6 +185,64 @@ export default function CustomerDetailDrawer({
     Number.isFinite(parsedCreditDelta) &&
     parsedCreditDelta !== 0 &&
     !creditSaving;
+  const normalizedEmailDraft = emailDraft.trim();
+  const canSaveEmail =
+    !!detail &&
+    !emailSaving &&
+    normalizedEmailDraft !== String(detail.customer.email ?? "").trim();
+  const canSaveProfile =
+    !!detail &&
+    !profileSaving &&
+    (
+      profileDraft.firstName.trim() !== String(detail.customer.first_name ?? "").trim() ||
+      profileDraft.lastName.trim() !== String(detail.customer.last_name ?? "").trim() ||
+      profileDraft.fullName.trim() !== String(detail.customer.full_name ?? "").trim() ||
+      profileDraft.phone.trim() !== String(detail.customer.phone ?? "").trim() ||
+      profileDraft.address.trim() !== String(detail.customer.address ?? "").trim() ||
+      profileDraft.notes.trim() !== String(detail.customer.notes ?? "").trim()
+    );
+  const linkedCustomerLabels = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const customer of customers) {
+      map.set(customer.id, customer.customer_name);
+    }
+    return map;
+  }, [customers]);
+  const filteredProfiles = React.useMemo(() => {
+    if (!detail || detail.has_account) return [];
+    const q = linkQuery.trim().toLowerCase();
+    return profiles
+      .filter((profile) => profile.id !== "")
+      .filter((profile) => profile.customer_id !== detail.customer.id)
+      .filter((profile) => {
+        const displayName =
+          [profile.first_name, profile.last_name].filter(Boolean).join(" ").trim() ||
+          `User ${profile.id.slice(0, 8)}`;
+        const linkedCustomerLabel = profile.customer_id
+          ? linkedCustomerLabels.get(profile.customer_id) ?? "Linked customer"
+          : "No customer";
+        const haystack = `${displayName} ${linkedCustomerLabel}`.toLowerCase();
+        return !q || haystack.includes(q);
+      })
+      .slice(0, 8);
+  }, [detail, linkQuery, linkedCustomerLabels, profiles]);
+  const filteredCombineCustomers = React.useMemo(() => {
+    if (!detail) return [];
+    const q = combineQuery.trim().toLowerCase();
+    return customers
+      .filter((customer) => customer.id !== detail.customer.id)
+      .filter((customer) => {
+        const haystack = `${customer.customer_name} ${customer.email ?? ""}`.toLowerCase();
+        return !q || haystack.includes(q);
+      })
+      .slice(0, 8);
+  }, [combineQuery, customers, detail]);
+  const linkedProfiles = React.useMemo(() => {
+    if (!detail) return [];
+    return profiles.filter((profile) => profile.customer_id === detail.customer.id);
+  }, [detail, profiles]);
+
+  if (!isOpen) return null;
 
   return (
     <>
@@ -148,12 +285,104 @@ export default function CustomerDetailDrawer({
               <div style={{ ...styles.summaryGrid, ...(isMobileViewport ? styles.summaryGridMobile : null) }}>
                 <div style={styles.identityCard}>
                   <div style={styles.cardLabel}>Customer</div>
-                  <div style={styles.customerName}>{customerName}</div>
-                  <div style={styles.identityMeta}>Email: {detail.customer.email || "—"}</div>
+                  <div style={styles.customerNameRow}>
+                    <div style={styles.customerName}>{customerName}</div>
+                    <button
+                      type="button"
+                      style={styles.editProfileButton}
+                      onClick={() => setProfileEditorOpen(true)}
+                      aria-label="Edit customer profile"
+                    >
+                      EDIT
+                    </button>
+                  </div>
+                  <div style={styles.identityFieldRow}>
+                    <label style={styles.identityFieldLabel}>Email</label>
+                    <div style={styles.identityEmailRow}>
+                      <input
+                        value={emailDraft}
+                        onChange={(event) => setEmailDraft(event.target.value)}
+                        placeholder="customer@email.com"
+                        style={styles.identityEmailInput}
+                      />
+                      <AppButton
+                        type="button"
+                        variant="ghost"
+                        style={styles.identityEmailButton}
+                        disabled={!canSaveEmail}
+                        onClick={async () => {
+                          if (!detail || !canSaveEmail) return;
+                          setEmailSaving(true);
+                          try {
+                            await onSaveCustomerEmail(detail.customer.id, normalizedEmailDraft);
+                          } catch (error) {
+                            console.error("Failed to update customer email", error);
+                            alert("Failed to update customer email.");
+                          } finally {
+                            setEmailSaving(false);
+                          }
+                        }}
+                      >
+                        {emailSaving ? "SAVING..." : "SAVE"}
+                      </AppButton>
+                    </div>
+                  </div>
                   <div style={styles.identityMeta}>Created: {fmtDate(detail.customer.created_at)}</div>
                 </div>
-                <div style={styles.metricCard}>
+                <div
+                  style={{
+                    ...styles.metricCard,
+                    ...(detail.customer.steak_credits_enabled ? styles.metricCardEnabled : null),
+                  }}
+                >
                   <div style={styles.cardLabel}>Steak Credits</div>
+                  <label
+                    style={{
+                      ...styles.toggleCorner,
+                      ...(detail.customer.steak_credits_enabled ? styles.toggleCornerEnabled : null),
+                      ...(creditsEnabledSaving ? styles.toggleCornerDisabled : null),
+                    }}
+                  >
+                    <span style={styles.toggleCornerLabel}>
+                      {detail.customer.steak_credits_enabled ? "ON" : "OFF"}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={detail.customer.steak_credits_enabled}
+                      disabled={creditsEnabledSaving}
+                      onChange={async (event) => {
+                        if (!detail) return;
+                        setCreditsEnabledSaving(true);
+                        try {
+                          await onToggleSteakCreditsEnabled(
+                            detail.customer.id,
+                            event.target.checked
+                          );
+                        } catch (error) {
+                          console.error("Failed to update Steak Credits activation", error);
+                          alert("Failed to update Steak Credits activation.");
+                        } finally {
+                          setCreditsEnabledSaving(false);
+                        }
+                      }}
+                      style={styles.toggleInput}
+                      aria-label="Toggle steak credits"
+                    />
+                    <span
+                      aria-hidden
+                      style={{
+                        ...styles.toggleTrack,
+                        ...(detail.customer.steak_credits_enabled ? styles.toggleTrackEnabled : null),
+                      }}
+                    >
+                      <span
+                        style={{
+                          ...styles.toggleThumb,
+                          ...(detail.customer.steak_credits_enabled ? styles.toggleThumbEnabled : null),
+                        }}
+                      />
+                    </span>
+                  </label>
                   <div style={styles.metricValue}>₱ {fmtMoney(detail.customer.available_steak_credits)}</div>
                   <div style={styles.creditAdjustRow}>
                     <input
@@ -281,9 +510,277 @@ export default function CustomerDetailDrawer({
                   )}
                 </div>
               </div>
+
+              <div style={styles.actionsPanel}>
+                <div style={styles.sectionTitle}>CUSTOMER ACTIONS</div>
+                <div style={{ ...styles.actionsGrid, ...(isMobileViewport ? styles.actionsGridMobile : null) }}>
+                  {!detail.has_account ? (
+                    <div style={styles.actionsCard}>
+                      <div style={styles.cleanupTitle}>Cleanup</div>
+                      <AppButton
+                        type="button"
+                        variant="ghost"
+                        style={styles.cleanupDangerButton}
+                        disabled={deleteSaving}
+                        onClick={async () => {
+                          if (!detail) return;
+                          if (!window.confirm("Delete this customer?")) return;
+                          setDeleteSaving(true);
+                          try {
+                            await onDeleteCustomer(detail.customer.id);
+                          } catch (error) {
+                            console.error("Failed to delete customer", error);
+                            alert("Failed to delete customer.");
+                          } finally {
+                            setDeleteSaving(false);
+                          }
+                        }}
+                      >
+                        {deleteSaving ? "DELETING..." : "DELETE CUSTOMER"}
+                      </AppButton>
+
+                      <div style={styles.cleanupBlock}>
+                        <div style={styles.cleanupLabel}>Link to user</div>
+                        <input
+                          value={linkQuery}
+                          onChange={(event) => setLinkQuery(event.target.value)}
+                          placeholder="Search user profile..."
+                          style={styles.cleanupInput}
+                        />
+                        {filteredProfiles.length > 0 ? (
+                          <div style={styles.cleanupList}>
+                            {filteredProfiles.map((profile) => {
+                              const displayName =
+                                [profile.first_name, profile.last_name]
+                                  .filter(Boolean)
+                                  .join(" ")
+                                  .trim() || `User ${profile.id.slice(0, 8)}`;
+                              const linkedCustomerLabel = profile.customer_id
+                                ? linkedCustomerLabels.get(profile.customer_id) ?? "Linked customer"
+                                : "No customer yet";
+                              return (
+                                <button
+                                  key={profile.id}
+                                  type="button"
+                                  style={styles.cleanupOption}
+                                  disabled={linkSaving}
+                                  onClick={async () => {
+                                    if (!detail) return;
+                                    const actionText = profile.customer_id
+                                      ? "This user already has a customer. Transfer this customer's orders to that customer?"
+                                      : "Link this customer to the selected user?";
+                                    if (!window.confirm(actionText)) return;
+                                    setLinkSaving(true);
+                                    try {
+                                      await onLinkCustomerToProfile(detail.customer.id, profile.id);
+                                    } catch (error) {
+                                      console.error("Failed to link customer", error);
+                                      alert("Failed to link customer.");
+                                    } finally {
+                                      setLinkSaving(false);
+                                    }
+                                  }}
+                                >
+                                  <span>{displayName}</span>
+                                  <span style={styles.cleanupOptionMeta}>{linkedCustomerLabel}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {linkedProfiles.length > 0 && deleteUserAvailable ? (
+                    <div style={styles.actionsCard}>
+                      <div style={styles.cleanupTitle}>User</div>
+                      <AppButton
+                        type="button"
+                        variant="ghost"
+                        style={styles.cleanupDangerButton}
+                        disabled={deleteUserSaving}
+                        onClick={async () => {
+                          if (!detail || linkedProfiles.length === 0) return;
+                          if (!window.confirm("Delete the linked user account?")) return;
+                          setDeleteUserSaving(true);
+                          try {
+                            await onDeleteUser(linkedProfiles[0].id, detail.customer.id);
+                          } catch (error) {
+                            console.error("Failed to delete user", error);
+                            alert("Failed to delete user.");
+                          } finally {
+                            setDeleteUserSaving(false);
+                          }
+                        }}
+                      >
+                        {deleteUserSaving ? "DELETING..." : "DELETE USER"}
+                      </AppButton>
+                    </div>
+                  ) : null}
+
+                  <div style={styles.actionsCard}>
+                    <div style={styles.cleanupTitle}>Combine</div>
+                    <div style={styles.cleanupBlock}>
+                      <div style={styles.cleanupLabel}>Combine with customer</div>
+                      <input
+                        value={combineQuery}
+                        onChange={(event) => setCombineQuery(event.target.value)}
+                        placeholder="Search customer..."
+                        style={styles.cleanupInput}
+                      />
+                      {filteredCombineCustomers.length > 0 ? (
+                        <div style={styles.cleanupList}>
+                          {filteredCombineCustomers.map((customer) => (
+                            <button
+                              key={customer.id}
+                              type="button"
+                              style={styles.cleanupOption}
+                              disabled={combineSaving}
+                              onClick={async () => {
+                                if (!detail) return;
+                                if (
+                                  !window.confirm(
+                                    "Combine these customers? Orders will be transferred and one customer will be removed."
+                                  )
+                                ) {
+                                  return;
+                                }
+                                setCombineSaving(true);
+                                try {
+                                  await onCombineCustomer(detail.customer.id, customer.id);
+                                } catch (error) {
+                                  console.error("Failed to combine customers", error);
+                                  alert("Failed to combine customers.");
+                                } finally {
+                                  setCombineSaving(false);
+                                }
+                              }}
+                            >
+                              <span>{customer.customer_name}</span>
+                              <span style={styles.cleanupOptionMeta}>
+                                {customer.has_account ? "Has user" : "No user"}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </>
           )}
         </div>
+        {profileEditorOpen && detail ? (
+          <div style={styles.profileModalBackdrop}>
+            <div style={styles.profileModal}>
+              <div style={styles.profileModalHeader}>
+                <div style={styles.sectionTitle}>EDIT CUSTOMER</div>
+                <button
+                  type="button"
+                  style={styles.profileModalClose}
+                  onClick={() => setProfileEditorOpen(false)}
+                >
+                  CLOSE
+                </button>
+              </div>
+              <div style={styles.profileFormGrid}>
+                <label style={styles.profileField}>
+                  <span style={styles.identityFieldLabel}>First name</span>
+                  <input
+                    value={profileDraft.firstName}
+                    onChange={(event) =>
+                      setProfileDraft((prev) => ({ ...prev, firstName: event.target.value }))
+                    }
+                    style={styles.cleanupInput}
+                  />
+                </label>
+                <label style={styles.profileField}>
+                  <span style={styles.identityFieldLabel}>Last name</span>
+                  <input
+                    value={profileDraft.lastName}
+                    onChange={(event) =>
+                      setProfileDraft((prev) => ({ ...prev, lastName: event.target.value }))
+                    }
+                    style={styles.cleanupInput}
+                  />
+                </label>
+                <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                  <span style={styles.identityFieldLabel}>Display name</span>
+                  <input
+                    value={profileDraft.fullName}
+                    onChange={(event) =>
+                      setProfileDraft((prev) => ({ ...prev, fullName: event.target.value }))
+                    }
+                    style={styles.cleanupInput}
+                  />
+                </label>
+                <label style={styles.profileField}>
+                  <span style={styles.identityFieldLabel}>Phone</span>
+                  <input
+                    value={profileDraft.phone}
+                    onChange={(event) =>
+                      setProfileDraft((prev) => ({ ...prev, phone: event.target.value }))
+                    }
+                    style={styles.cleanupInput}
+                  />
+                </label>
+                <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                  <span style={styles.identityFieldLabel}>Address</span>
+                  <input
+                    value={profileDraft.address}
+                    onChange={(event) =>
+                      setProfileDraft((prev) => ({ ...prev, address: event.target.value }))
+                    }
+                    style={styles.cleanupInput}
+                  />
+                </label>
+                <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                  <span style={styles.identityFieldLabel}>Notes</span>
+                  <textarea
+                    value={profileDraft.notes}
+                    onChange={(event) =>
+                      setProfileDraft((prev) => ({ ...prev, notes: event.target.value }))
+                    }
+                    style={styles.profileTextarea}
+                  />
+                </label>
+              </div>
+              <div style={styles.profileModalActions}>
+                <AppButton
+                  type="button"
+                  variant="ghost"
+                  style={styles.profileModalButton}
+                  onClick={() => setProfileEditorOpen(false)}
+                >
+                  CANCEL
+                </AppButton>
+                <AppButton
+                  type="button"
+                  variant="ghost"
+                  style={styles.profileModalButton}
+                  disabled={!canSaveProfile}
+                  onClick={async () => {
+                    if (!detail || !canSaveProfile) return;
+                    setProfileSaving(true);
+                    try {
+                      await onSaveCustomerProfile(detail.customer.id, profileDraft);
+                      setProfileEditorOpen(false);
+                    } catch (error) {
+                      console.error("Failed to update customer profile", error);
+                      alert("Failed to update customer profile.");
+                    } finally {
+                      setProfileSaving(false);
+                    }
+                  }}
+                >
+                  {profileSaving ? "SAVING..." : "SAVE"}
+                </AppButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </aside>
     </>
   );
@@ -311,7 +808,9 @@ const styles: Record<string, React.CSSProperties> = {
   titleMobile: { fontSize: TOPBAR_FONT_SIZE_MOBILE, fontWeight: 700, letterSpacing: 0.2 },
   content: {
     flex: 1,
-    overflow: "hidden",
+    minHeight: 0,
+    overflowY: "auto",
+    overflowX: "hidden",
     padding: `6px 0 48px ${BACK_BTN_W + TITLE_GAP}px`,
     color: "var(--tp-text-color)",
     display: "flex",
@@ -336,13 +835,20 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--tp-control-bg-soft)",
   },
   metricCard: {
-    border: "1px solid var(--tp-border-color-soft)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--tp-border-color-soft)",
     borderRadius: 16,
     padding: "18px 20px",
     background: "var(--tp-control-bg-soft)",
     display: "grid",
     alignContent: "start",
     gap: 10,
+    position: "relative",
+  },
+  metricCardEnabled: {
+    borderColor: "rgba(195,138,40,0.72)",
+    boxShadow: "inset 0 0 0 1px rgba(195,138,40,0.18)",
   },
   cardLabel: {
     fontSize: 12,
@@ -356,6 +862,216 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     lineHeight: 1.1,
   },
+  customerNameRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  editProfileButton: {
+    height: 32,
+    minWidth: 56,
+    borderRadius: 999,
+    border: "1px solid var(--tp-border-color-soft)",
+    background: "rgba(255,255,255,0.04)",
+    color: "var(--tp-text-color)",
+    padding: "0 12px",
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: 0.8,
+    cursor: "pointer",
+  },
+  identityFieldRow: {
+    display: "grid",
+    gap: 6,
+    marginTop: 10,
+  },
+  identityFieldLabel: {
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    opacity: 0.72,
+  },
+  identityEmailRow: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    gap: 10,
+    alignItems: "center",
+  },
+  identityEmailInput: {
+    width: "100%",
+    height: 40,
+    borderRadius: 10,
+    border: "1px solid var(--tp-border-color-soft)",
+    background: "rgba(255,255,255,0.04)",
+    color: "var(--tp-text-color)",
+    padding: "0 14px",
+    minWidth: 0,
+  },
+  identityEmailButton: {
+    minWidth: 92,
+    height: 40,
+    borderRadius: 10,
+    padding: "0 16px",
+    fontWeight: 800,
+    letterSpacing: 0.8,
+  },
+  cleanupSection: {
+    display: "grid",
+    gap: 10,
+    marginTop: 18,
+    paddingTop: 14,
+    borderTop: "1px solid rgba(255,255,255,0.08)",
+  },
+  actionsPanel: {
+    display: "grid",
+    gap: 14,
+    paddingRight: 12,
+  },
+  actionsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 16,
+    alignItems: "start",
+  },
+  actionsGridMobile: {
+    gridTemplateColumns: "1fr",
+  },
+  actionsCard: {
+    border: "1px solid var(--tp-border-color-soft)",
+    borderRadius: 16,
+    padding: "18px 20px",
+    background: "var(--tp-control-bg-soft)",
+    display: "grid",
+    gap: 12,
+    alignContent: "start",
+  },
+  profileModalBackdrop: {
+    position: "absolute",
+    inset: 0,
+    background: "rgba(0,0,0,0.5)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    zIndex: 5,
+  },
+  profileModal: {
+    width: "min(640px, 100%)",
+    borderRadius: 18,
+    border: "1px solid var(--tp-border-color-soft)",
+    background: "rgba(17,17,17,0.96)",
+    padding: "18px 20px",
+    display: "grid",
+    gap: 16,
+  },
+  profileModalHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  profileModalClose: {
+    border: "none",
+    background: "transparent",
+    color: "var(--tp-text-color)",
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 1,
+    cursor: "pointer",
+  },
+  profileFormGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gap: 12,
+  },
+  profileField: {
+    display: "grid",
+    gap: 6,
+    minWidth: 0,
+  },
+  profileFieldFull: {
+    gridColumn: "1 / -1",
+  },
+  profileTextarea: {
+    width: "100%",
+    minHeight: 96,
+    borderRadius: 10,
+    border: "1px solid var(--tp-border-color-soft)",
+    background: "rgba(255,255,255,0.04)",
+    color: "var(--tp-text-color)",
+    padding: "10px 14px",
+    resize: "vertical",
+    font: "inherit",
+  },
+  profileModalActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  profileModalButton: {
+    minWidth: 96,
+    height: 40,
+  },
+  cleanupTitle: {
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 1,
+    textTransform: "uppercase",
+    opacity: 0.72,
+  },
+  cleanupBlock: {
+    display: "grid",
+    gap: 8,
+  },
+  cleanupLabel: {
+    fontSize: 13,
+    fontWeight: 700,
+    opacity: 0.88,
+  },
+  cleanupInput: {
+    width: "100%",
+    height: 40,
+    borderRadius: 10,
+    border: "1px solid var(--tp-border-color-soft)",
+    background: "rgba(255,255,255,0.04)",
+    color: "var(--tp-text-color)",
+    padding: "0 14px",
+    minWidth: 0,
+  },
+  cleanupList: {
+    display: "grid",
+    gap: 8,
+    maxHeight: 220,
+    overflowY: "auto",
+  },
+  cleanupOption: {
+    width: "100%",
+    display: "grid",
+    gap: 2,
+    textAlign: "left",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.08)",
+    background: "rgba(255,255,255,0.03)",
+    color: "var(--tp-text-color)",
+    padding: "10px 12px",
+    cursor: "pointer",
+  },
+  cleanupOptionMeta: {
+    fontSize: 12,
+    opacity: 0.68,
+  },
+  cleanupDangerButton: {
+    minWidth: 160,
+    height: 40,
+    borderRadius: 10,
+    padding: "0 16px",
+    fontWeight: 800,
+    letterSpacing: 0.8,
+    color: "#ff9f9f",
+    borderColor: "rgba(255,159,159,0.42)",
+  },
   identityMeta: {
     fontSize: 14,
     opacity: 0.88,
@@ -365,6 +1081,65 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 28,
     fontWeight: 900,
     lineHeight: 1.1,
+  },
+  toggleCorner: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    color: "rgba(255,255,255,0.55)",
+    cursor: "pointer",
+    userSelect: "none",
+  },
+  toggleCornerEnabled: {
+    color: "var(--tp-accent)",
+  },
+  toggleCornerDisabled: {
+    opacity: 0.6,
+    cursor: "default",
+  },
+  toggleCornerLabel: {
+    fontSize: 11,
+    fontWeight: 900,
+    letterSpacing: 0.8,
+  },
+  toggleInput: {
+    position: "absolute",
+    opacity: 0,
+    pointerEvents: "none",
+    width: 1,
+    height: 1,
+  },
+  toggleTrack: {
+    width: 34,
+    height: 20,
+    borderRadius: 999,
+    background: "rgba(255,255,255,0.14)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "rgba(255,255,255,0.22)",
+    position: "relative",
+    transition: "background 140ms ease, border-color 140ms ease",
+  },
+  toggleTrackEnabled: {
+    background: "rgba(195,138,40,0.24)",
+    borderColor: "rgba(195,138,40,0.72)",
+  },
+  toggleThumb: {
+    position: "absolute",
+    top: 2,
+    left: 2,
+    width: 14,
+    height: 14,
+    borderRadius: "50%",
+    background: "rgba(255,255,255,0.8)",
+    transition: "transform 140ms ease, background 140ms ease",
+  },
+  toggleThumbEnabled: {
+    transform: "translateX(14px)",
+    background: "var(--tp-accent)",
   },
   creditAdjustRow: {
     display: "grid",
@@ -389,10 +1164,8 @@ const styles: Record<string, React.CSSProperties> = {
     height: 40,
   },
   ordersBlock: {
-    flex: 1,
-    minHeight: 0,
-    display: "flex",
-    flexDirection: "column",
+    display: "grid",
+    gap: 0,
   },
   sectionHead: {
     display: "flex",
@@ -432,9 +1205,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 12px 10px 0",
   },
   listBody: {
-    flex: 1,
-    minHeight: 0,
-    overflowY: "auto",
     paddingRight: 12,
   },
   listRow: {
