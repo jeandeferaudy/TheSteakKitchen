@@ -292,6 +292,15 @@ export default function MyDetailsDrawer({
             .filter(Boolean)
             .join(", "),
           notes: draft.delivery_note,
+          attentionTo: draft.attention_to,
+          addressLine1: draft.line1,
+          addressLine2: draft.line2,
+          barangay: draft.barangay,
+          city: draft.city,
+          province: draft.province,
+          postalCode: draft.postal_code,
+          country: draft.country || "Philippines",
+          deliveryNote: draft.delivery_note,
         };
         const customer = linkedCustomerId
           ? await updateCustomerRecord(linkedCustomerId, nextCustomerInput)

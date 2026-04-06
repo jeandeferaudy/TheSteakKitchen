@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 type SendOrderEmailPayload = {
-  email: string;
+  email?: string | null;
   name?: string | null;
   orderId: string;
   orderNumber?: string | null;
@@ -18,10 +18,6 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as SendOrderEmailPayload;
     const email = String(body.email ?? "").trim();
-    if (!email) {
-      return NextResponse.json({ ok: false, error: "Missing email." }, { status: 400 });
-    }
-
     const orderId = String(body.orderId ?? "").trim();
     if (!orderId) {
       return NextResponse.json({ ok: false, error: "Missing order id." }, { status: 400 });
@@ -44,6 +40,8 @@ export async function POST(req: Request) {
       .map((v) => v.trim())
       .filter(Boolean);
     const adminBcc = adminBccEnv.length ? adminBccEnv : DEFAULT_ADMIN_BCC;
+    const recipients = email ? [email] : adminBcc;
+    const bccRecipients = email ? adminBcc : [];
 
     const html = `
       <div style="font-family: Arial, sans-serif; color: #111;">
@@ -65,8 +63,8 @@ export async function POST(req: Request) {
       },
       body: JSON.stringify({
         from,
-        to: email,
-        bcc: adminBcc,
+        to: recipients,
+        ...(bccRecipients.length ? { bcc: bccRecipients } : null),
         subject: `${orderLabel} has been placed`,
         html,
       }),

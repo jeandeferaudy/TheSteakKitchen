@@ -637,7 +637,6 @@ export async function addOrderLinesByAdmin(
       size_snapshot: (p as any)?.size ?? null,
       temperature_snapshot: (p as any)?.temperature ?? null,
       country_snapshot: (p as any)?.country_of_origin ?? null,
-      unit_price: unitPrice,
       price_snapshot: unitPrice,
       cost_snapshot: costSnapshot,
       qty: it.qty,
@@ -653,7 +652,6 @@ export async function addOrderLinesByAdmin(
   attempts.push(rows as any[]);
   attempts.push(dropColumn(attempts[attempts.length - 1], "line_profit"));
   attempts.push(dropColumn(attempts[attempts.length - 1], "cost_snapshot"));
-  attempts.push(dropColumn(attempts[attempts.length - 1], "unit_price"));
   attempts.push(dropColumn(attempts[attempts.length - 1], "added_by_admin"));
   attempts.push(dropColumn(attempts[attempts.length - 1], "packed_qty"));
 
@@ -677,7 +675,7 @@ export async function hydrateOrderLineFinancialSnapshots(orderId: string) {
 
   const lineRows = await supabase
     .from("order_lines")
-    .select("id,order_id,product_id,qty,line_total,unit_price,price_snapshot,cost_snapshot,line_profit")
+    .select("id,order_id,product_id,qty,line_total,price_snapshot,cost_snapshot,line_profit")
     .eq("order_id", orderId);
 
   const lineErrorText = String(lineRows.error?.message ?? "").toLowerCase();
@@ -707,13 +705,11 @@ export async function hydrateOrderLineFinancialSnapshots(orderId: string) {
     const qty = Math.max(0, Number(line.qty ?? 0));
     const lineTotal = Math.max(0, Number(line.line_total ?? 0));
     const unitPrice =
-      line.unit_price === null || line.unit_price === undefined
-        ? line.price_snapshot === null || line.price_snapshot === undefined
-          ? qty > 0
-            ? lineTotal / qty
-            : 0
-          : Number(line.price_snapshot)
-        : Number(line.unit_price);
+      line.price_snapshot === null || line.price_snapshot === undefined
+        ? qty > 0
+          ? lineTotal / qty
+          : 0
+        : Number(line.price_snapshot);
     const existingCost =
       line.cost_snapshot === null || line.cost_snapshot === undefined
         ? null
@@ -725,7 +721,6 @@ export async function hydrateOrderLineFinancialSnapshots(orderId: string) {
     const lineProfit = Math.max(0, lineTotal - costSnapshot * qty);
 
     const payload: Record<string, unknown> = {};
-    if (line.unit_price === null || line.unit_price === undefined) payload.unit_price = unitPrice;
     if (line.price_snapshot === null || line.price_snapshot === undefined) payload.price_snapshot = unitPrice;
     if (line.cost_snapshot === null || line.cost_snapshot === undefined) payload.cost_snapshot = costSnapshot;
     if (line.line_profit === null || line.line_profit === undefined) payload.line_profit = lineProfit;
@@ -734,7 +729,7 @@ export async function hydrateOrderLineFinancialSnapshots(orderId: string) {
     const updateRes = await supabase.from("order_lines").update(payload).eq("id", String(line.id));
     if (updateRes.error) {
       const msg = String(updateRes.error.message ?? "").toLowerCase();
-      if (msg.includes("cost_snapshot") || msg.includes("line_profit") || msg.includes("unit_price")) {
+      if (msg.includes("cost_snapshot") || msg.includes("line_profit")) {
         // Older schema path: skip silently.
         continue;
       }
@@ -778,7 +773,6 @@ export async function updateOrderLineUnitPrice(orderLineId: string, unitPrice: n
   const lineProfit = Math.max(0, lineTotal - Number(costSnapshot ?? 0) * qty);
 
   const payload: Record<string, unknown> = {
-    unit_price: normalizedUnitPrice,
     price_snapshot: normalizedUnitPrice,
     line_total: lineTotal,
     cost_snapshot: costSnapshot,

@@ -1,21 +1,3 @@
-alter table if exists public.orders
-add column if not exists steak_credits_applied numeric(12,0) not null default 0;
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conname = 'orders_steak_credits_applied_nonnegative'
-      and conrelid = 'public.orders'::regclass
-  ) then
-    alter table public.orders
-    add constraint orders_steak_credits_applied_nonnegative
-    check (steak_credits_applied >= 0);
-  end if;
-end
-$$;
-
 drop function if exists public.checkout_cart_v2(
   text,
   uuid,
@@ -29,6 +11,7 @@ drop function if exists public.checkout_cart_v2(
   text,
   boolean,
   boolean,
+  numeric,
   numeric,
   numeric,
   numeric,
@@ -131,7 +114,6 @@ begin
   insert into public.orders (
     cart_id,
     customer_id,
-    session_id,
     access_scope,
     full_name,
     email,
@@ -155,7 +137,6 @@ begin
   values (
     v_cart_id,
     v_customer_id,
-    p_session_id,
     'public',
     v_full_name,
     nullif(trim(p_email), ''),

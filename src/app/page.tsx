@@ -244,6 +244,7 @@ function isDarkColor(hexOrColor: string | null | undefined): boolean {
 export default function Page() {
   const blankCustomer = React.useCallback(
     (): CustomerDraft => ({
+      selected_customer_id: "",
       full_name: "",
       email: "",
       phone: "",
@@ -1101,9 +1102,7 @@ export default function Page() {
       const deliveryNote = String(data?.delivery_note ?? "").trim();
       const hasAddress =
         String(data?.address_line1 ?? "").trim().length > 0 &&
-        String(data?.barangay ?? "").trim().length > 0 &&
         String(data?.city ?? "").trim().length > 0 &&
-        String(data?.province ?? "").trim().length > 0 &&
         String(data?.postal_code ?? "").trim().length > 0;
       setProfileAddress({
         attention_to: String(data?.attention_to ?? "").trim(),
@@ -2295,9 +2294,7 @@ React.useEffect(() => {
       const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
       const hasAddress =
         String(data?.address_line1 ?? "").trim().length > 0 &&
-        String(data?.barangay ?? "").trim().length > 0 &&
         String(data?.city ?? "").trim().length > 0 &&
-        String(data?.province ?? "").trim().length > 0 &&
         String(data?.postal_code ?? "").trim().length > 0;
       setProfileAddress({
         attention_to: String(data?.attention_to ?? "").trim(),
@@ -3031,6 +3028,14 @@ React.useEffect(() => {
   }, []);
 
   React.useEffect(() => {
+    if (!isAdmin) return;
+    if (allCustomers.length > 0 && adminProfiles.length > 0) return;
+    void refreshAdminCustomers().catch((error) => {
+      console.error("Failed to preload admin customers", error);
+    });
+  }, [adminProfiles.length, allCustomers.length, isAdmin, refreshAdminCustomers]);
+
+  React.useEffect(() => {
     if (!isAdmin) {
       setDeleteUserAvailable(false);
       return;
@@ -3185,6 +3190,34 @@ React.useEffect(() => {
     [authUserId, selectedCustomerDetail]
   );
 
+  const syncCustomerToLinkedProfiles = React.useCallback(
+    async (customer: Awaited<ReturnType<typeof fetchCustomerById>> extends infer T
+      ? T extends null
+        ? never
+        : T
+      : never) => {
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          first_name: customer.first_name || null,
+          last_name: customer.last_name || null,
+          phone: customer.phone.trim() || null,
+          attention_to: customer.attention_to.trim() || null,
+          address_line1: customer.address_line1.trim() || null,
+          address_line2: customer.address_line2.trim() || null,
+          barangay: customer.barangay.trim() || null,
+          city: customer.city.trim() || null,
+          province: customer.province.trim() || null,
+          postal_code: customer.postal_code.trim() || null,
+          country: customer.country.trim() || "Philippines",
+          delivery_note: customer.delivery_note.trim() || null,
+        })
+        .eq("customer_id", customer.id);
+      if (error) throw error;
+    },
+    []
+  );
+
   const handleSaveCustomerEmail = React.useCallback(
     async (customerId: string, email: string) => {
       const fallbackCustomer = await fetchCustomerById(customerId);
@@ -3204,7 +3237,17 @@ React.useEffect(() => {
         email,
         address: sourceCustomer.address,
         notes: sourceCustomer.notes,
+        attentionTo: sourceCustomer.attention_to,
+        addressLine1: sourceCustomer.address_line1,
+        addressLine2: sourceCustomer.address_line2,
+        barangay: sourceCustomer.barangay,
+        city: sourceCustomer.city,
+        province: sourceCustomer.province,
+        postalCode: sourceCustomer.postal_code,
+        country: sourceCustomer.country,
+        deliveryNote: sourceCustomer.delivery_note,
       });
+      await syncCustomerToLinkedProfiles(nextCustomer);
 
       setAllCustomers((prev) =>
         prev.map((row) =>
@@ -3237,7 +3280,7 @@ React.useEffect(() => {
         }
       }
     },
-    [authUserId, selectedCustomerDetail]
+    [authUserId, selectedCustomerDetail, syncCustomerToLinkedProfiles]
   );
 
   const handleSaveCustomerProfile = React.useCallback(
@@ -3248,8 +3291,15 @@ React.useEffect(() => {
         lastName: string;
         fullName: string;
         phone: string;
-        address: string;
-        notes: string;
+        attentionTo: string;
+        addressLine1: string;
+        addressLine2: string;
+        barangay: string;
+        city: string;
+        province: string;
+        postalCode: string;
+        country: string;
+        deliveryNote: string;
       }
     ) => {
       const fallbackCustomer = await fetchCustomerById(customerId);
@@ -3267,9 +3317,31 @@ React.useEffect(() => {
         fullName: input.fullName,
         phone: input.phone,
         email: sourceCustomer.email,
-        address: input.address,
-        notes: input.notes,
+        address: [
+          input.attentionTo,
+          input.addressLine1,
+          input.addressLine2,
+          input.barangay,
+          input.city,
+          input.province,
+          input.postalCode,
+          input.country || "Philippines",
+        ]
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean)
+          .join(", "),
+        notes: sourceCustomer.notes,
+        attentionTo: input.attentionTo,
+        addressLine1: input.addressLine1,
+        addressLine2: input.addressLine2,
+        barangay: input.barangay,
+        city: input.city,
+        province: input.province,
+        postalCode: input.postalCode,
+        country: input.country || "Philippines",
+        deliveryNote: input.deliveryNote,
       });
+      await syncCustomerToLinkedProfiles(nextCustomer);
 
       setAllCustomers((prev) =>
         prev.map((row) =>
@@ -3291,7 +3363,7 @@ React.useEffect(() => {
           : prev
       );
     },
-    [selectedCustomerDetail]
+    [selectedCustomerDetail, syncCustomerToLinkedProfiles]
   );
 
   const handleBulkSetCustomerSteakCreditsEnabled = React.useCallback(
@@ -4370,6 +4442,15 @@ React.useEffect(() => {
             email,
             address: composeAddress(customerDraft),
             notes: customerDraft.notes,
+            attentionTo: customerDraft.attention_to,
+            addressLine1: customerDraft.line1,
+            addressLine2: customerDraft.line2,
+            barangay: customerDraft.barangay,
+            city: customerDraft.city,
+            province: customerDraft.province,
+            postalCode: customerDraft.postal_code,
+            country: customerDraft.country,
+            deliveryNote: customerDraft.notes,
           })
         : await ensureCustomerRecord({
             firstName,
@@ -4379,6 +4460,15 @@ React.useEffect(() => {
             email,
             address: composeAddress(customerDraft),
             notes: customerDraft.notes,
+            attentionTo: customerDraft.attention_to,
+            addressLine1: customerDraft.line1,
+            addressLine2: customerDraft.line2,
+            barangay: customerDraft.barangay,
+            city: customerDraft.city,
+            province: customerDraft.province,
+            postalCode: customerDraft.postal_code,
+            country: customerDraft.country,
+            deliveryNote: customerDraft.notes,
           });
 
       const finalCustomerId = ensuredCustomer?.id ? String(ensuredCustomer.id) : resolvedCustomerId;
@@ -4410,25 +4500,6 @@ React.useEffect(() => {
       return finalCustomerId;
     },
     [composeAddress]
-  );
-
-  const linkProfileToOrderCustomer = React.useCallback(
-    async (profileId: string, orderId: string, customerDraft: CustomerDraft, email?: string | null) => {
-      const { data: orderRow, error } = await supabase
-        .from("orders")
-        .select("customer_id")
-        .eq("id", orderId)
-        .maybeSingle();
-      if (error) throw error;
-      const customerId = orderRow?.customer_id ? String(orderRow.customer_id) : null;
-      return syncProfileAndCustomer({
-        profileId,
-        email: email ?? null,
-        customerId,
-        customerDraft,
-      });
-    },
-    [syncProfileAndCustomer]
   );
 
   const openOrderSummary = React.useCallback(
@@ -4601,7 +4672,15 @@ React.useEffect(() => {
       }
     }
 
-    if (user?.id && !customer.placed_for_someone_else) {
+    if (customer.placed_for_someone_else) {
+      const selectedCustomerId = String(customer.selected_customer_id ?? "").trim();
+      if (selectedCustomerId) {
+        linkedCheckoutCustomerId = selectedCustomerId;
+      } else {
+        const emailMatchedCustomer = await findCustomerByEmail(customer.email.trim()).catch(() => null);
+        linkedCheckoutCustomerId = emailMatchedCustomer?.id ?? null;
+      }
+    } else if (user?.id && !customer.placed_for_someone_else) {
       const { data: linkedProfile } = await supabase
         .from("profiles")
         .select("customer_id")
@@ -4909,12 +4988,12 @@ React.useEffect(() => {
     }
 
     let emailSent = false;
-    if (orderId && customerEmail.trim()) {
+    if (orderId) {
       try {
         const origin =
           typeof window !== "undefined" ? window.location.origin : undefined;
         const emailPayload = {
-          email: customerEmail.trim(),
+          email: customerEmail.trim() || null,
           name: customer.full_name?.trim() || null,
           orderId,
           orderNumber: resolvedOrderNumber || null,
@@ -4943,23 +5022,14 @@ React.useEffect(() => {
       )
     );
     await refreshCart();
-    if (user?.id) {
+    if (user?.id && (saveAddressToProfile || createAccountFromDetails)) {
       try {
-        if (orderId) {
-          await linkProfileToOrderCustomer(
-            user.id,
-            orderId,
-            customer,
-            customerEmail.trim() || user.email || null
-          );
-        } else if (saveAddressToProfile || createAccountFromDetails) {
-          await syncProfileAndCustomer({
-            profileId: user.id,
-            email: customerEmail.trim() || user.email || null,
-            customerId: resolvedCustomerId,
-            customerDraft: customer,
-          });
-        }
+        await syncProfileAndCustomer({
+          profileId: user.id,
+          email: customerEmail.trim() || user.email || null,
+          customerId: resolvedCustomerId,
+          customerDraft: customer,
+        });
       } catch (profileSyncError) {
         console.warn("[checkout] profile/customer sync failed:", profileSyncError);
       }
@@ -4988,7 +5058,7 @@ React.useEffect(() => {
     } finally {
       setSubmittingCheckout(false);
     }
-  }, [blankCustomer, cartItems, composeAddress, createAccountFromDetails, customer, ensureCheckoutAccountFromDetails, formatSupabaseError, linkProfileToOrderCustomer, paymentFile, refreshCart, saveAddressToProfile, scrollToProducts, submittingCheckout, syncProfileAndCustomer]);
+  }, [blankCustomer, cartItems, composeAddress, createAccountFromDetails, customer, ensureCheckoutAccountFromDetails, formatSupabaseError, paymentFile, refreshCart, saveAddressToProfile, scrollToProducts, submittingCheckout, syncProfileAndCustomer]);
 
   const selectedProductImages: ProductImage[] = React.useMemo(() => {
     if (!selectedId) return [];
@@ -5304,6 +5374,7 @@ React.useEffect(() => {
           onOpenAllCustomers={openAllCustomersDrawer}
           onOpenAllPurchases={openAllPurchasesDrawer}
           onOpenAllProducts={openAllProductsView}
+          onOpenLoyaltyPrograms={openLoyaltyProgramsDrawer}
           onOpenInventory={openInventoryDrawer}
           onOpenAnalytics={openAnalyticsDrawer}
           onLogout={logout}
@@ -5603,6 +5674,7 @@ React.useEffect(() => {
         total={subtotal}
         customer={customer as CustomerDraft}
         setCustomer={handleSetCustomer}
+        adminCustomerOptions={allCustomers}
         isAdmin={isAdmin}
         isLoggedIn={!!authUserId}
         steakCreditsEnabled={steakCreditsEnabled}
@@ -5724,9 +5796,6 @@ React.useEffect(() => {
         backgroundStyle={mainZoneStyle}
         orders={allOrders}
         onOpenCustomer={openCustomerDetailDrawer}
-        onCreateOrder={() => {
-          void createOrderAndOpen();
-        }}
         selectedOrderId={selectedAllOrderId}
         onSelectOrder={(id) => {
           setSelectedAllOrderId(id);
@@ -5752,6 +5821,22 @@ React.useEffect(() => {
         backgroundStyle={mainZoneStyle}
         onClose={() => {
           setAllReviewsOpen(false);
+          goBackDrawer("/shop");
+        }}
+      />
+
+      <LoyaltyProgramsDrawer
+        isOpen={loyaltyProgramsOpen}
+        topOffset={topOffset}
+        backgroundStyle={mainZoneStyle}
+        settings={loyaltyProgramsDraft}
+        saving={loyaltyProgramsSaving}
+        error={loyaltyProgramsError}
+        onChange={(next) => {
+          void saveLoyaltyProgramsDraft(next);
+        }}
+        onBack={() => {
+          setLoyaltyProgramsOpen(false);
           goBackDrawer("/shop");
         }}
       />
@@ -5917,7 +6002,7 @@ React.useEffect(() => {
                 <div style={styles.orderPlacedText}>
                   {orderPlacedModal.emailSent
                     ? orderPlacedModal.isPublic
-                      ? "Your order has been sent to your email with a link to open this order summary and track its status."
+                      ? "Your order confirmation has been sent to your email with a link to open this order summary and track its status."
                       : "Your order has been sent to your email."
                     : orderPlacedModal.isPublic
                       ? "Use the OK button below to open your order summary and track its status."
@@ -5930,7 +6015,7 @@ React.useEffect(() => {
                     onClick={() => {
                       const orderId = orderPlacedModal.orderId;
                       const noticeText = orderPlacedModal.emailSent
-                        ? "Your order has been sent to your email with a link to open this order summary and track its status."
+                        ? "Your order confirmation has been sent to your email with a link to open this order summary and track its status."
                         : "Your order has been placed. Use this order summary to track its status.";
                       setOrderPlacedModal(null);
                       void openOrderSummary(orderId, { noticeText });

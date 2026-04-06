@@ -2,7 +2,7 @@ import { supabase } from "@/lib/supabase";
 import { fetchOrders, type OrderListItem } from "@/lib/ordersApi";
 
 const CUSTOMER_SELECT =
-  "id,first_name,last_name,full_name,phone,email,address,notes,created_at,available_steak_credits,steak_credits_enabled";
+  "id,first_name,last_name,full_name,phone,email,address,notes,attention_to,address_line1,address_line2,barangay,city,province,postal_code,country,delivery_note,created_at,available_steak_credits,steak_credits_enabled";
 const CUSTOMER_SELECT_LEGACY =
   "id,first_name,last_name,full_name,phone,email,address,notes,created_at,available_steak_credits";
 
@@ -25,6 +25,15 @@ export type CustomerIdentityInput = {
   email?: string | null;
   address?: string | null;
   notes?: string | null;
+  attentionTo?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  barangay?: string | null;
+  city?: string | null;
+  province?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+  deliveryNote?: string | null;
 };
 
 export type CustomerRecord = {
@@ -36,6 +45,15 @@ export type CustomerRecord = {
   email: string | null;
   address: string;
   notes: string | null;
+  attention_to: string;
+  address_line1: string;
+  address_line2: string;
+  barangay: string;
+  city: string;
+  province: string;
+  postal_code: string;
+  country: string;
+  delivery_note: string;
   created_at?: string | null;
   available_steak_credits: number;
   steak_credits_enabled: boolean;
@@ -83,6 +101,23 @@ export function composeCustomerFullName(input: CustomerIdentityInput): string {
   return [first, last].filter(Boolean).join(" ").trim() || full;
 }
 
+function composeCustomerAddress(input: CustomerIdentityInput): string {
+  const structured = [
+    input.attentionTo,
+    input.addressLine1,
+    input.addressLine2,
+    input.barangay,
+    input.city,
+    input.province,
+    input.postalCode,
+    input.country,
+  ]
+    .map((value) => normalizeText(value))
+    .filter(Boolean)
+    .join(", ");
+  return structured || normalizeText(input.address);
+}
+
 function mapCustomerRecord(row: Record<string, unknown>): CustomerRecord {
   return {
     id: String(row.id ?? ""),
@@ -93,25 +128,35 @@ function mapCustomerRecord(row: Record<string, unknown>): CustomerRecord {
     email: row.email == null ? null : String(row.email),
     address: String(row.address ?? ""),
     notes: row.notes == null ? null : String(row.notes),
+    attention_to: String(row.attention_to ?? ""),
+    address_line1: String(row.address_line1 ?? ""),
+    address_line2: String(row.address_line2 ?? ""),
+    barangay: String(row.barangay ?? ""),
+    city: String(row.city ?? ""),
+    province: String(row.province ?? ""),
+    postal_code: String(row.postal_code ?? ""),
+    country: String(row.country ?? ""),
+    delivery_note: String(row.delivery_note ?? ""),
     created_at: row.created_at == null ? null : String(row.created_at),
     available_steak_credits: Number(row.available_steak_credits ?? 0),
     steak_credits_enabled: Boolean(row.steak_credits_enabled),
   };
 }
 
-export async function fetchCustomerById(customerId: string): Promise<CustomerRecord | null> {
-  let { data, error } = await supabase
-    .from("customers")
-    .select(CUSTOMER_SELECT)
-    .eq("id", customerId)
-    .maybeSingle();
-  if (error && isMissingSteakCreditsEnabledColumn(error)) {
-    ({ data, error } = await supabase
-      .from("customers")
-      .select(CUSTOMER_SELECT_LEGACY)
-      .eq("id", customerId)
-      .maybeSingle());
+async function selectCustomerRows<T>(
+  build: (columns: string) => unknown
+): Promise<{ data: T | null; error: unknown }> {
+  const primary = (await build(CUSTOMER_SELECT)) as { data: T | null; error: unknown };
+  if (primary.error && isMissingSteakCreditsEnabledColumn(primary.error)) {
+    return (await build(CUSTOMER_SELECT_LEGACY)) as { data: T | null; error: unknown };
   }
+  return primary;
+}
+
+export async function fetchCustomerById(customerId: string): Promise<CustomerRecord | null> {
+  const { data, error } = await selectCustomerRows<Record<string, unknown>>((columns) =>
+    supabase.from("customers").select(columns).eq("id", customerId).maybeSingle()
+  );
   if (error) throw error;
   if (!data) return null;
   return mapCustomerRecord(data as Record<string, unknown>);
@@ -125,18 +170,9 @@ export async function findExactCustomerMatch(
   const emailKey = normalizeKey(input.email);
   if (!fullName || !phoneKey) return null;
 
-  let { data, error } = await supabase
-    .from("customers")
-    .select(CUSTOMER_SELECT)
-    .eq("full_name", fullName)
-    .limit(20);
-  if (error && isMissingSteakCreditsEnabledColumn(error)) {
-    ({ data, error } = await supabase
-      .from("customers")
-      .select(CUSTOMER_SELECT_LEGACY)
-      .eq("full_name", fullName)
-      .limit(20));
-  }
+  const { data, error } = await selectCustomerRows<Record<string, unknown>[]>((columns) =>
+    supabase.from("customers").select(columns).eq("full_name", fullName).limit(20)
+  );
   if (error) throw error;
 
   const matches = (data ?? [])
@@ -151,18 +187,9 @@ export async function findCustomerByEmail(email: string | null | undefined): Pro
   const emailKey = normalizeKey(email);
   if (!emailKey) return null;
 
-  let { data, error } = await supabase
-    .from("customers")
-    .select(CUSTOMER_SELECT)
-    .ilike("email", emailKey)
-    .limit(20);
-  if (error && isMissingSteakCreditsEnabledColumn(error)) {
-    ({ data, error } = await supabase
-      .from("customers")
-      .select(CUSTOMER_SELECT_LEGACY)
-      .ilike("email", emailKey)
-      .limit(20));
-  }
+  const { data, error } = await selectCustomerRows<Record<string, unknown>[]>((columns) =>
+    supabase.from("customers").select(columns).ilike("email", emailKey).limit(20)
+  );
   if (error) throw error;
 
   const matches = (data ?? [])
@@ -204,23 +231,13 @@ export async function ensureCustomerForAccountSignup(input: {
     }
     if (!normalizeText(existingByEmail.phone) && phone) payload.phone = phone;
     if (normalizeKey(existingByEmail.email) !== email) payload.email = email;
+    payload.country = existingByEmail.country || "Philippines";
 
     if (Object.keys(payload).length === 0) return existingByEmail;
 
-    let { data, error } = await supabase
-      .from("customers")
-      .update(payload)
-      .eq("id", existingByEmail.id)
-      .select(CUSTOMER_SELECT)
-      .single();
-    if (error && isMissingSteakCreditsEnabledColumn(error)) {
-      ({ data, error } = await supabase
-        .from("customers")
-        .update(payload)
-        .eq("id", existingByEmail.id)
-        .select(CUSTOMER_SELECT_LEGACY)
-        .single());
-    }
+    const { data, error } = await selectCustomerRows<Record<string, unknown>>((columns) =>
+      supabase.from("customers").update(payload).eq("id", existingByEmail.id).select(columns).single()
+    );
     if (error) throw error;
     return mapCustomerRecord(data as Record<string, unknown>);
   }
@@ -235,21 +252,8 @@ export async function ensureCustomerForAccountSignup(input: {
     }) || email;
   const phone = normalizeText(input.phone);
 
-  let { data, error } = await supabase
-    .from("customers")
-    .insert({
-      first_name: firstName,
-      last_name: lastName,
-      full_name: fullName,
-      phone,
-      email,
-      address: "",
-      notes: null,
-    })
-    .select(CUSTOMER_SELECT)
-    .single();
-  if (error && isMissingSteakCreditsEnabledColumn(error)) {
-    ({ data, error } = await supabase
+  const { data, error } = await selectCustomerRows<Record<string, unknown>>((columns) =>
+    supabase
       .from("customers")
       .insert({
         first_name: firstName,
@@ -258,11 +262,20 @@ export async function ensureCustomerForAccountSignup(input: {
         phone,
         email,
         address: "",
+        attention_to: null,
+        address_line1: null,
+        address_line2: null,
+        barangay: null,
+        city: null,
+        province: null,
+        postal_code: null,
+        country: "Philippines",
+        delivery_note: null,
         notes: null,
       })
-      .select(CUSTOMER_SELECT_LEGACY)
-      .single());
-  }
+      .select(columns)
+      .single()
+  );
   if (error) throw error;
   return mapCustomerRecord(data as Record<string, unknown>);
 }
@@ -281,28 +294,35 @@ export async function ensureCustomerRecord(input: CustomerIdentityInput): Promis
     const email = normalizeText(input.email) || null;
     const address = normalizeText(input.address);
     const notes = normalizeText(input.notes) || null;
+    const attentionTo = normalizeText(input.attentionTo) || null;
+    const addressLine1 = normalizeText(input.addressLine1) || null;
+    const addressLine2 = normalizeText(input.addressLine2) || null;
+    const barangay = normalizeText(input.barangay) || null;
+    const city = normalizeText(input.city) || null;
+    const province = normalizeText(input.province) || null;
+    const postalCode = normalizeText(input.postalCode) || null;
+    const country = normalizeText(input.country) || "Philippines";
+    const deliveryNote = normalizeText(input.deliveryNote) || null;
 
     if (firstName && firstName !== normalizeText(existing.first_name)) payload.first_name = firstName;
     if (lastName && lastName !== normalizeText(existing.last_name)) payload.last_name = lastName;
     if (email && normalizeKey(existing.email) !== normalizeKey(email)) payload.email = email;
     if (address && address !== existing.address) payload.address = address;
     if (notes && normalizeText(existing.notes) !== notes) payload.notes = notes;
+    if (attentionTo !== existing.attention_to) payload.attention_to = attentionTo;
+    if (addressLine1 !== (existing.address_line1 || null)) payload.address_line1 = addressLine1;
+    if (addressLine2 !== (existing.address_line2 || null)) payload.address_line2 = addressLine2;
+    if (barangay !== (existing.barangay || null)) payload.barangay = barangay;
+    if (city !== (existing.city || null)) payload.city = city;
+    if (province !== (existing.province || null)) payload.province = province;
+    if (postalCode !== (existing.postal_code || null)) payload.postal_code = postalCode;
+    if (country !== existing.country) payload.country = country;
+    if (deliveryNote !== (existing.delivery_note || null)) payload.delivery_note = deliveryNote;
 
     if (Object.keys(payload).length > 0) {
-      let { data, error } = await supabase
-        .from("customers")
-        .update(payload)
-        .eq("id", existing.id)
-        .select(CUSTOMER_SELECT)
-        .maybeSingle();
-      if (error && isMissingSteakCreditsEnabledColumn(error)) {
-        ({ data, error } = await supabase
-          .from("customers")
-          .update(payload)
-          .eq("id", existing.id)
-          .select(CUSTOMER_SELECT_LEGACY)
-          .maybeSingle());
-      }
+      const { data, error } = await selectCustomerRows<Record<string, unknown>>((columns) =>
+        supabase.from("customers").update(payload).eq("id", existing.id).select(columns).maybeSingle()
+      );
       if (error) throw error;
       return mapCustomerRecord((data ?? existing) as Record<string, unknown>);
     }
@@ -310,34 +330,30 @@ export async function ensureCustomerRecord(input: CustomerIdentityInput): Promis
     return existing;
   }
 
-  let { data, error } = await supabase
-    .from("customers")
-    .insert({
-      first_name: normalizeText(input.firstName) || null,
-      last_name: normalizeText(input.lastName) || null,
-      full_name: fullName,
-      phone,
-      email: normalizeText(input.email) || null,
-      address: normalizeText(input.address),
-      notes: normalizeText(input.notes) || null,
-    })
-    .select(CUSTOMER_SELECT)
-    .single();
-  if (error && isMissingSteakCreditsEnabledColumn(error)) {
-    ({ data, error } = await supabase
+  const { data, error } = await selectCustomerRows<Record<string, unknown>>((columns) =>
+    supabase
       .from("customers")
       .insert({
         first_name: normalizeText(input.firstName) || null,
         last_name: normalizeText(input.lastName) || null,
-        full_name: fullName,
-        phone,
-        email: normalizeText(input.email) || null,
-        address: normalizeText(input.address),
-        notes: normalizeText(input.notes) || null,
-      })
-      .select(CUSTOMER_SELECT_LEGACY)
-      .single());
-  }
+      full_name: fullName,
+      phone,
+      email: normalizeText(input.email) || null,
+      address: composeCustomerAddress(input),
+      attention_to: normalizeText(input.attentionTo) || null,
+      address_line1: normalizeText(input.addressLine1) || null,
+      address_line2: normalizeText(input.addressLine2) || null,
+      barangay: normalizeText(input.barangay) || null,
+      city: normalizeText(input.city) || null,
+      province: normalizeText(input.province) || null,
+      postal_code: normalizeText(input.postalCode) || null,
+      country: normalizeText(input.country) || "Philippines",
+      delivery_note: normalizeText(input.deliveryNote) || null,
+      notes: normalizeText(input.notes) || null,
+    })
+      .select(columns)
+      .single()
+  );
   if (error) throw error;
   return mapCustomerRecord(data as Record<string, unknown>);
 }
@@ -354,36 +370,31 @@ export async function updateCustomerRecord(
   customerId: string,
   input: CustomerIdentityInput
 ): Promise<CustomerRecord> {
-  let { data, error } = await supabase
-    .from("customers")
+  const { data, error } = await selectCustomerRows<Record<string, unknown>>((columns) =>
+    supabase
+      .from("customers")
     .update({
       first_name: normalizeText(input.firstName) || null,
       last_name: normalizeText(input.lastName) || null,
       full_name: composeCustomerFullName(input),
       phone: normalizeText(input.phone),
       email: normalizeText(input.email) || null,
-      address: normalizeText(input.address),
+      address: composeCustomerAddress(input),
+      attention_to: normalizeText(input.attentionTo) || null,
+      address_line1: normalizeText(input.addressLine1) || null,
+      address_line2: normalizeText(input.addressLine2) || null,
+      barangay: normalizeText(input.barangay) || null,
+      city: normalizeText(input.city) || null,
+      province: normalizeText(input.province) || null,
+      postal_code: normalizeText(input.postalCode) || null,
+      country: normalizeText(input.country) || "Philippines",
+      delivery_note: normalizeText(input.deliveryNote) || null,
       notes: normalizeText(input.notes) || null,
     })
-    .eq("id", customerId)
-    .select(CUSTOMER_SELECT)
-    .single();
-  if (error && isMissingSteakCreditsEnabledColumn(error)) {
-    ({ data, error } = await supabase
-      .from("customers")
-      .update({
-        first_name: normalizeText(input.firstName) || null,
-        last_name: normalizeText(input.lastName) || null,
-        full_name: composeCustomerFullName(input),
-        phone: normalizeText(input.phone),
-        email: normalizeText(input.email) || null,
-        address: normalizeText(input.address),
-        notes: normalizeText(input.notes) || null,
-      })
       .eq("id", customerId)
-      .select(CUSTOMER_SELECT_LEGACY)
-      .single());
-  }
+      .select(columns)
+      .single()
+  );
   if (error) throw error;
   return mapCustomerRecord(data as Record<string, unknown>);
 }
@@ -433,6 +444,15 @@ export async function fetchAdminCustomerDetail(customerId: string): Promise<Cust
       email: overview.email,
       address: "",
       notes: null,
+      attention_to: "",
+      address_line1: "",
+      address_line2: "",
+      barangay: "",
+      city: "",
+      province: "",
+      postal_code: "",
+      country: "Philippines",
+      delivery_note: "",
       created_at: null,
       available_steak_credits: overview.current_credits,
       steak_credits_enabled: overview.steak_credits_enabled,

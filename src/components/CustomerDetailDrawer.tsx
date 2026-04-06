@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
   AppButton,
   TOPBAR_FONT_SIZE,
@@ -32,8 +33,15 @@ type Props = {
       lastName: string;
       fullName: string;
       phone: string;
-      address: string;
-      notes: string;
+      attentionTo: string;
+      addressLine1: string;
+      addressLine2: string;
+      barangay: string;
+      city: string;
+      province: string;
+      postalCode: string;
+      country: string;
+      deliveryNote: string;
     }
   ) => Promise<void> | void;
   onSaveCustomerEmail: (customerId: string, email: string) => Promise<void> | void;
@@ -107,8 +115,15 @@ export default function CustomerDetailDrawer({
     lastName: "",
     fullName: "",
     phone: "",
-    address: "",
-    notes: "",
+    attentionTo: "",
+    addressLine1: "",
+    addressLine2: "",
+    barangay: "",
+    city: "",
+    province: "",
+    postalCode: "",
+    country: "Philippines",
+    deliveryNote: "",
   });
   const [linkQuery, setLinkQuery] = React.useState("");
   const [combineQuery, setCombineQuery] = React.useState("");
@@ -119,8 +134,14 @@ export default function CustomerDetailDrawer({
   const [deleteUserSaving, setDeleteUserSaving] = React.useState(false);
   const [linkSaving, setLinkSaving] = React.useState(false);
   const [combineSaving, setCombineSaving] = React.useState(false);
+  const [portalReady, setPortalReady] = React.useState(false);
   const panelTop = Math.max(topOffset, 0);
   const panelHeight = `calc(100vh - ${panelTop}px)`;
+
+  React.useEffect(() => {
+    setPortalReady(true);
+    return () => setPortalReady(false);
+  }, []);
 
   React.useEffect(() => {
     const onResize = () => setIsMobileViewport(window.innerWidth < 768);
@@ -139,8 +160,15 @@ export default function CustomerDetailDrawer({
       lastName: detail?.customer.last_name ?? "",
       fullName: detail?.customer.full_name ?? "",
       phone: detail?.customer.phone ?? "",
-      address: detail?.customer.address ?? "",
-      notes: detail?.customer.notes ?? "",
+      attentionTo: detail?.customer.attention_to ?? "",
+      addressLine1: detail?.customer.address_line1 ?? "",
+      addressLine2: detail?.customer.address_line2 ?? "",
+      barangay: detail?.customer.barangay ?? "",
+      city: detail?.customer.city ?? "",
+      province: detail?.customer.province ?? "",
+      postalCode: detail?.customer.postal_code ?? "",
+      country: detail?.customer.country || "Philippines",
+      deliveryNote: detail?.customer.delivery_note ?? "",
     });
     setLinkQuery("");
     setCombineQuery("");
@@ -158,8 +186,16 @@ export default function CustomerDetailDrawer({
     detail?.customer.full_name,
     detail?.customer.id,
     detail?.customer.last_name,
-    detail?.customer.notes,
     detail?.customer.phone,
+    detail?.customer.attention_to,
+    detail?.customer.address_line1,
+    detail?.customer.address_line2,
+    detail?.customer.barangay,
+    detail?.customer.city,
+    detail?.customer.province,
+    detail?.customer.postal_code,
+    detail?.customer.country,
+    detail?.customer.delivery_note,
   ]);
 
   const filteredOrders = React.useMemo(() => {
@@ -198,8 +234,15 @@ export default function CustomerDetailDrawer({
       profileDraft.lastName.trim() !== String(detail.customer.last_name ?? "").trim() ||
       profileDraft.fullName.trim() !== String(detail.customer.full_name ?? "").trim() ||
       profileDraft.phone.trim() !== String(detail.customer.phone ?? "").trim() ||
-      profileDraft.address.trim() !== String(detail.customer.address ?? "").trim() ||
-      profileDraft.notes.trim() !== String(detail.customer.notes ?? "").trim()
+      profileDraft.attentionTo.trim() !== String(detail.customer.attention_to ?? "").trim() ||
+      profileDraft.addressLine1.trim() !== String(detail.customer.address_line1 ?? "").trim() ||
+      profileDraft.addressLine2.trim() !== String(detail.customer.address_line2 ?? "").trim() ||
+      profileDraft.barangay.trim() !== String(detail.customer.barangay ?? "").trim() ||
+      profileDraft.city.trim() !== String(detail.customer.city ?? "").trim() ||
+      profileDraft.province.trim() !== String(detail.customer.province ?? "").trim() ||
+      profileDraft.postalCode.trim() !== String(detail.customer.postal_code ?? "").trim() ||
+      profileDraft.country.trim() !== String(detail.customer.country ?? "Philippines").trim() ||
+      profileDraft.deliveryNote.trim() !== String(detail.customer.delivery_note ?? "").trim()
     );
   const linkedCustomerLabels = React.useMemo(() => {
     const map = new Map<string, string>();
@@ -512,11 +555,11 @@ export default function CustomerDetailDrawer({
               </div>
 
               <div style={styles.actionsPanel}>
-                <div style={styles.sectionTitle}>CUSTOMER ACTIONS</div>
+                <div style={styles.sectionTitle}>ADMIN ONLY</div>
                 <div style={{ ...styles.actionsGrid, ...(isMobileViewport ? styles.actionsGridMobile : null) }}>
-                  {!detail.has_account ? (
-                    <div style={styles.actionsCard}>
-                      <div style={styles.cleanupTitle}>Cleanup</div>
+                  <div style={styles.actionsCard}>
+                    <div style={styles.cleanupTitle}>Cleanup</div>
+                    {!detail.has_account ? (
                       <AppButton
                         type="button"
                         variant="ghost"
@@ -538,9 +581,40 @@ export default function CustomerDetailDrawer({
                       >
                         {deleteSaving ? "DELETING..." : "DELETE CUSTOMER"}
                       </AppButton>
+                    ) : (
+                      <div style={styles.cleanupPlaceholder}>Customer is already linked to a user.</div>
+                    )}
 
+                    {linkedProfiles.length > 0 && deleteUserAvailable ? (
+                      <AppButton
+                        type="button"
+                        variant="ghost"
+                        style={styles.cleanupDangerButton}
+                        disabled={deleteUserSaving}
+                        onClick={async () => {
+                          if (!detail || linkedProfiles.length === 0) return;
+                          if (!window.confirm("Delete the linked user account?")) return;
+                          setDeleteUserSaving(true);
+                          try {
+                            await onDeleteUser(linkedProfiles[0].id, detail.customer.id);
+                          } catch (error) {
+                            console.error("Failed to delete user", error);
+                            alert("Failed to delete user.");
+                          } finally {
+                            setDeleteUserSaving(false);
+                          }
+                        }}
+                      >
+                        {deleteUserSaving ? "DELETING..." : "DELETE USER"}
+                      </AppButton>
+                    ) : null}
+                  </div>
+
+                  <div style={styles.actionsCard}>
+                    <div style={styles.cleanupTitle}>Link to user</div>
+                    {!detail.has_account ? (
                       <div style={styles.cleanupBlock}>
-                        <div style={styles.cleanupLabel}>Link to user</div>
+                        <div style={styles.cleanupLabel}>Select user</div>
                         <input
                           value={linkQuery}
                           onChange={(event) => setLinkQuery(event.target.value)}
@@ -589,35 +663,10 @@ export default function CustomerDetailDrawer({
                           </div>
                         ) : null}
                       </div>
-                    </div>
-                  ) : null}
-
-                  {linkedProfiles.length > 0 && deleteUserAvailable ? (
-                    <div style={styles.actionsCard}>
-                      <div style={styles.cleanupTitle}>User</div>
-                      <AppButton
-                        type="button"
-                        variant="ghost"
-                        style={styles.cleanupDangerButton}
-                        disabled={deleteUserSaving}
-                        onClick={async () => {
-                          if (!detail || linkedProfiles.length === 0) return;
-                          if (!window.confirm("Delete the linked user account?")) return;
-                          setDeleteUserSaving(true);
-                          try {
-                            await onDeleteUser(linkedProfiles[0].id, detail.customer.id);
-                          } catch (error) {
-                            console.error("Failed to delete user", error);
-                            alert("Failed to delete user.");
-                          } finally {
-                            setDeleteUserSaving(false);
-                          }
-                        }}
-                      >
-                        {deleteUserSaving ? "DELETING..." : "DELETE USER"}
-                      </AppButton>
-                    </div>
-                  ) : null}
+                    ) : (
+                      <div style={styles.cleanupPlaceholder}>This customer already has a linked user.</div>
+                    )}
+                  </div>
 
                   <div style={styles.actionsCard}>
                     <div style={styles.cleanupTitle}>Combine</div>
@@ -672,116 +721,189 @@ export default function CustomerDetailDrawer({
             </>
           )}
         </div>
-        {profileEditorOpen && detail ? (
-          <div style={styles.profileModalBackdrop}>
-            <div style={styles.profileModal}>
-              <div style={styles.profileModalHeader}>
-                <div style={styles.sectionTitle}>EDIT CUSTOMER</div>
-                <button
-                  type="button"
-                  style={styles.profileModalClose}
-                  onClick={() => setProfileEditorOpen(false)}
-                >
-                  CLOSE
-                </button>
-              </div>
-              <div style={styles.profileFormGrid}>
-                <label style={styles.profileField}>
-                  <span style={styles.identityFieldLabel}>First name</span>
-                  <input
-                    value={profileDraft.firstName}
-                    onChange={(event) =>
-                      setProfileDraft((prev) => ({ ...prev, firstName: event.target.value }))
-                    }
-                    style={styles.cleanupInput}
-                  />
-                </label>
-                <label style={styles.profileField}>
-                  <span style={styles.identityFieldLabel}>Last name</span>
-                  <input
-                    value={profileDraft.lastName}
-                    onChange={(event) =>
-                      setProfileDraft((prev) => ({ ...prev, lastName: event.target.value }))
-                    }
-                    style={styles.cleanupInput}
-                  />
-                </label>
-                <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
-                  <span style={styles.identityFieldLabel}>Display name</span>
-                  <input
-                    value={profileDraft.fullName}
-                    onChange={(event) =>
-                      setProfileDraft((prev) => ({ ...prev, fullName: event.target.value }))
-                    }
-                    style={styles.cleanupInput}
-                  />
-                </label>
-                <label style={styles.profileField}>
-                  <span style={styles.identityFieldLabel}>Phone</span>
-                  <input
-                    value={profileDraft.phone}
-                    onChange={(event) =>
-                      setProfileDraft((prev) => ({ ...prev, phone: event.target.value }))
-                    }
-                    style={styles.cleanupInput}
-                  />
-                </label>
-                <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
-                  <span style={styles.identityFieldLabel}>Address</span>
-                  <input
-                    value={profileDraft.address}
-                    onChange={(event) =>
-                      setProfileDraft((prev) => ({ ...prev, address: event.target.value }))
-                    }
-                    style={styles.cleanupInput}
-                  />
-                </label>
-                <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
-                  <span style={styles.identityFieldLabel}>Notes</span>
-                  <textarea
-                    value={profileDraft.notes}
-                    onChange={(event) =>
-                      setProfileDraft((prev) => ({ ...prev, notes: event.target.value }))
-                    }
-                    style={styles.profileTextarea}
-                  />
-                </label>
-              </div>
-              <div style={styles.profileModalActions}>
-                <AppButton
-                  type="button"
-                  variant="ghost"
-                  style={styles.profileModalButton}
-                  onClick={() => setProfileEditorOpen(false)}
-                >
-                  CANCEL
-                </AppButton>
-                <AppButton
-                  type="button"
-                  variant="ghost"
-                  style={styles.profileModalButton}
-                  disabled={!canSaveProfile}
-                  onClick={async () => {
-                    if (!detail || !canSaveProfile) return;
-                    setProfileSaving(true);
-                    try {
-                      await onSaveCustomerProfile(detail.customer.id, profileDraft);
-                      setProfileEditorOpen(false);
-                    } catch (error) {
-                      console.error("Failed to update customer profile", error);
-                      alert("Failed to update customer profile.");
-                    } finally {
-                      setProfileSaving(false);
-                    }
-                  }}
-                >
-                  {profileSaving ? "SAVING..." : "SAVE"}
-                </AppButton>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </aside>
+      {portalReady && profileEditorOpen && detail
+        ? createPortal(
+            <div style={styles.profileModalBackdrop}>
+              <div style={styles.profileModal}>
+                <div style={styles.profileModalHeader}>
+                  <div style={styles.profileModalTitle}>EDIT CUSTOMER</div>
+                  <button
+                    type="button"
+                    style={styles.profileModalClose}
+                    onClick={() => setProfileEditorOpen(false)}
+                  >
+                    CLOSE
+                  </button>
+                </div>
+                <div style={styles.profileFormGrid}>
+                  <label style={styles.profileField}>
+                    <span style={styles.profileFieldLabel}>First name</span>
+                    <input
+                      value={profileDraft.firstName}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, firstName: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={styles.profileField}>
+                    <span style={styles.profileFieldLabel}>Last name</span>
+                    <input
+                      value={profileDraft.lastName}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, lastName: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                    <span style={styles.profileFieldLabel}>Display name</span>
+                    <input
+                      value={profileDraft.fullName}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, fullName: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={styles.profileField}>
+                    <span style={styles.profileFieldLabel}>Phone</span>
+                    <input
+                      value={profileDraft.phone}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, phone: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                    <span style={styles.profileFieldLabel}>Attention to</span>
+                    <input
+                      value={profileDraft.attentionTo}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, attentionTo: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                    <span style={styles.profileFieldLabel}>Address line 1</span>
+                    <input
+                      value={profileDraft.addressLine1}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, addressLine1: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                    <span style={styles.profileFieldLabel}>Address line 2</span>
+                    <input
+                      value={profileDraft.addressLine2}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, addressLine2: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={styles.profileField}>
+                    <span style={styles.profileFieldLabel}>Barangay</span>
+                    <input
+                      value={profileDraft.barangay}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, barangay: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={styles.profileField}>
+                    <span style={styles.profileFieldLabel}>City</span>
+                    <input
+                      value={profileDraft.city}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, city: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={styles.profileField}>
+                    <span style={styles.profileFieldLabel}>Province</span>
+                    <input
+                      value={profileDraft.province}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, province: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={styles.profileField}>
+                    <span style={styles.profileFieldLabel}>Postal code</span>
+                    <input
+                      value={profileDraft.postalCode}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, postalCode: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                    <span style={styles.profileFieldLabel}>Country</span>
+                    <input
+                      value={profileDraft.country}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, country: event.target.value }))
+                      }
+                      style={styles.cleanupInput}
+                    />
+                  </label>
+                  <label style={{ ...styles.profileField, ...styles.profileFieldFull }}>
+                    <span style={styles.profileFieldLabel}>Delivery note</span>
+                    <textarea
+                      value={profileDraft.deliveryNote}
+                      onChange={(event) =>
+                        setProfileDraft((prev) => ({ ...prev, deliveryNote: event.target.value }))
+                      }
+                      style={styles.profileTextarea}
+                    />
+                  </label>
+                </div>
+                <div style={styles.profileModalActions}>
+                  <AppButton
+                    type="button"
+                    variant="ghost"
+                    style={styles.profileModalButton}
+                    onClick={() => setProfileEditorOpen(false)}
+                  >
+                    CANCEL
+                  </AppButton>
+                  <AppButton
+                    type="button"
+                    variant="ghost"
+                    style={styles.profileModalButton}
+                    disabled={!canSaveProfile}
+                    onClick={async () => {
+                      if (!detail || !canSaveProfile) return;
+                      setProfileSaving(true);
+                      try {
+                        await onSaveCustomerProfile(detail.customer.id, profileDraft);
+                        setProfileEditorOpen(false);
+                      } catch (error) {
+                        console.error("Failed to update customer profile", error);
+                        alert("Failed to update customer profile.");
+                      } finally {
+                        setProfileSaving(false);
+                      }
+                    }}
+                  >
+                    {profileSaving ? "SAVING..." : "SAVE"}
+                  </AppButton>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </>
   );
 }
@@ -948,23 +1070,34 @@ const styles: Record<string, React.CSSProperties> = {
     alignContent: "start",
   },
   profileModalBackdrop: {
-    position: "absolute",
+    position: "fixed",
     inset: 0,
-    background: "rgba(0,0,0,0.5)",
+    background: "rgba(0,0,0,0.66)",
     display: "flex",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "center",
-    padding: 20,
-    zIndex: 5,
+    padding: "20px 20px 28px",
+    zIndex: 5000,
+    overflowY: "auto",
   },
   profileModal: {
     width: "min(640px, 100%)",
+    maxHeight: "calc(100vh - 40px)",
     borderRadius: 18,
     border: "1px solid var(--tp-border-color-soft)",
     background: "rgba(17,17,17,0.96)",
     padding: "18px 20px",
     display: "grid",
     gap: 16,
+    overflowY: "auto",
+  },
+  profileModalTitle: {
+    fontSize: 13,
+    fontWeight: 900,
+    letterSpacing: 1.3,
+    textTransform: "uppercase",
+    color: "var(--tp-text-color)",
+    opacity: 0.96,
   },
   profileModalHeader: {
     display: "flex",
@@ -990,6 +1123,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: "grid",
     gap: 6,
     minWidth: 0,
+  },
+  profileFieldLabel: {
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    opacity: 0.92,
+    color: "var(--tp-text-color)",
   },
   profileFieldFull: {
     gridColumn: "1 / -1",
@@ -1024,6 +1165,14 @@ const styles: Record<string, React.CSSProperties> = {
   cleanupBlock: {
     display: "grid",
     gap: 8,
+  },
+  cleanupPlaceholder: {
+    fontSize: 13,
+    lineHeight: 1.5,
+    opacity: 0.68,
+    minHeight: 40,
+    display: "flex",
+    alignItems: "center",
   },
   cleanupLabel: {
     fontSize: 13,

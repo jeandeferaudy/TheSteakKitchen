@@ -32,6 +32,16 @@ function ordinalDay(n: number): string {
   return `${n}th`;
 }
 
+type LastOrderUpdateDraft = {
+  customerId: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  addressLine1: string;
+  postalCode: string;
+  notes: string;
+};
+
 type Props = {
   isOpen: boolean;
   topOffset?: number;
@@ -60,6 +70,11 @@ type Props = {
   // controlled form state
   customer: CustomerDraft;
   setCustomer: (next: CustomerDraft) => void;
+  adminCustomerOptions?: Array<{
+    id: string;
+    customer_name: string;
+    email?: string | null;
+  }>;
   isAdmin?: boolean;
   isLoggedIn?: boolean;
   steakCreditsEnabled?: boolean;
@@ -106,6 +121,7 @@ export default function CheckoutDrawer({
   checkoutState,
   customer,
   setCustomer,
+  adminCustomerOptions = [],
   isAdmin = false,
   isLoggedIn = false,
   steakCreditsEnabled = false,
@@ -143,6 +159,11 @@ export default function CheckoutDrawer({
   const [isNarrow, setIsNarrow] = React.useState(false);
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
   const [useProfileAddress, setUseProfileAddress] = React.useState(false);
+  const [selectedAdminCustomerId, setSelectedAdminCustomerId] = React.useState("");
+  const [adminCustomerPrefillBusy, setAdminCustomerPrefillBusy] = React.useState(false);
+  const [lastOrderUpdateDraft, setLastOrderUpdateDraft] = React.useState<LastOrderUpdateDraft | null>(null);
+  const [lastOrderUpdateOpen, setLastOrderUpdateOpen] = React.useState(false);
+  const [lastOrderUpdateSaving, setLastOrderUpdateSaving] = React.useState(false);
   const [deliveryRules, setDeliveryRules] = React.useState<DeliveryRule[]>([]);
   const [deliveryPricingOpen, setDeliveryPricingOpen] = React.useState(false);
   const [proofPreviewOpen, setProofPreviewOpen] = React.useState(false);
@@ -157,6 +178,115 @@ export default function CheckoutDrawer({
   const notesTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const rightStepScrollRef = React.useRef<HTMLDivElement | null>(null);
   const deliveryPricingRows = React.useMemo(() => getDeliveryPricingMatrixRows(), []);
+  const adminCustomerOptionLabels = React.useMemo(
+    () =>
+      adminCustomerOptions.map((option) => ({
+        id: option.id,
+        label: option.email
+          ? `${option.customer_name} - ${option.email}`
+          : option.customer_name,
+      })),
+    [adminCustomerOptions]
+  );
+
+  const handleAdminCustomerPrefill = React.useCallback(
+    async (customerId: string) => {
+      const selectedId = customerId.trim();
+      setSelectedAdminCustomerId(customerId);
+      if (!selectedId) return;
+
+      const selected = adminCustomerOptionLabels.find((option) => option.id === selectedId);
+      if (!selected) return;
+
+      setAdminCustomerPrefillBusy(true);
+      try {
+        const [
+          { data: customerRow, error: customerError },
+          { data: latestOrderRow, error: orderError },
+        ] =
+          await Promise.all([
+            supabase
+              .from("customers")
+              .select(
+                "full_name,email,phone,address,notes,attention_to,address_line1,address_line2,barangay,city,province,postal_code,country,delivery_note"
+              )
+              .eq("id", selected.id)
+              .maybeSingle(),
+            supabase
+              .from("orders")
+              .select("address,postal_code,notes")
+              .eq("customer_id", selected.id)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle(),
+          ]);
+        if (customerError) throw customerError;
+        if (orderError) throw orderError;
+
+        const customerLine1 = String(customerRow?.address_line1 ?? "").trim();
+        const customerLine2 = String(customerRow?.address_line2 ?? "").trim();
+        const customerBarangay = String(customerRow?.barangay ?? "").trim();
+        const customerCity = String(customerRow?.city ?? "").trim();
+        const customerProvince = String(customerRow?.province ?? "").trim();
+        const customerPostalCode = String(customerRow?.postal_code ?? "").trim();
+        const customerAttentionTo = String(customerRow?.attention_to ?? "").trim();
+        const customerCountry = String(customerRow?.country ?? "").trim();
+        const customerDeliveryNote = String(customerRow?.delivery_note ?? "").trim();
+        const latestOrderAddress = String(latestOrderRow?.address ?? "").trim();
+        const latestOrderPostalCode = String(latestOrderRow?.postal_code ?? "").trim();
+        const latestOrderNotes = String(latestOrderRow?.notes ?? "").trim();
+
+        const nextCustomer = {
+          ...customer,
+          selected_customer_id: selected.id,
+          full_name: String(customerRow?.full_name ?? "").trim(),
+          email: String(customerRow?.email ?? "").trim(),
+          phone: String(customerRow?.phone ?? "").trim(),
+          attention_to: customerAttentionTo,
+          line1: customerLine1,
+          line2: customerLine2,
+          barangay: customerBarangay,
+          city: customerCity,
+          province: customerProvince,
+          postal_code: customerPostalCode,
+          country: customerCountry || customer.country || "Philippines",
+          notes: customerDeliveryNote || String(customerRow?.notes ?? "").trim(),
+        };
+
+        setCustomer(nextCustomer);
+
+        const hasMissingCustomerFields =
+          !nextCustomer.full_name ||
+          !nextCustomer.phone ||
+          !nextCustomer.line1 ||
+          !nextCustomer.postal_code;
+        const hasUsefulLastOrderValues = Boolean(
+          latestOrderAddress || latestOrderPostalCode || latestOrderNotes
+        );
+
+        if (hasMissingCustomerFields && hasUsefulLastOrderValues) {
+          setLastOrderUpdateDraft({
+            customerId: selected.id,
+            fullName: nextCustomer.full_name,
+            email: nextCustomer.email,
+            phone: nextCustomer.phone,
+            addressLine1: nextCustomer.line1 || latestOrderAddress,
+            postalCode: nextCustomer.postal_code || latestOrderPostalCode,
+            notes: nextCustomer.notes || latestOrderNotes,
+          });
+          setLastOrderUpdateOpen(true);
+        } else {
+          setLastOrderUpdateDraft(null);
+          setLastOrderUpdateOpen(false);
+        }
+      } catch (error) {
+        console.error("[checkout] failed to prefill admin customer", error);
+      } finally {
+        setAdminCustomerPrefillBusy(false);
+      }
+    },
+    [adminCustomerOptionLabels, customer, setCustomer]
+  );
 
   React.useEffect(() => {
     const onResize = () => {
@@ -238,9 +368,7 @@ export default function CheckoutDrawer({
     if (!profileAddress) return false;
     return (
       profileAddress.line1.trim().length > 0 &&
-      profileAddress.barangay.trim().length > 0 &&
       profileAddress.city.trim().length > 0 &&
-      profileAddress.province.trim().length > 0 &&
       profileAddress.postal_code.trim().length > 0
     );
   }, [profileAddress]);
@@ -416,9 +544,7 @@ export default function CheckoutDrawer({
   const hasValidPhone = customer.phone.trim().length > 0;
   const hasRecipientName = customer.full_name.trim().length > 0;
   const hasRecipientLine1 = customer.line1.trim().length > 0;
-  const hasRecipientBarangay = customer.barangay.trim().length > 0;
   const hasRecipientCity = customer.city.trim().length > 0;
-  const hasRecipientProvince = customer.province.trim().length > 0;
   const hasRecipientPostalCode = customer.postal_code.trim().length > 0;
   const steakCreditsEstimate = useMemo(
     () => calculateSteakCredits(computedTotal),
@@ -436,9 +562,7 @@ export default function CheckoutDrawer({
     (!requiresDirectContactDetails || hasValidEmail) &&
     (!requiresDirectContactDetails || hasValidPhone) &&
     hasRecipientLine1 &&
-    hasRecipientBarangay &&
     hasRecipientCity &&
-    hasRecipientProvince &&
     hasRecipientPostalCode &&
     postalSupported &&
     customer.delivery_date.trim().length > 0 &&
@@ -465,9 +589,7 @@ export default function CheckoutDrawer({
   }
   if (requiresDirectContactDetails && !hasValidPhone) missingCustomer.push("phone");
   if (!hasRecipientLine1) missingCustomer.push("line 1");
-  if (!hasRecipientBarangay) missingCustomer.push("barangay");
   if (!hasRecipientCity) missingCustomer.push("city");
-  if (!hasRecipientProvince) missingCustomer.push("province");
   if (!hasRecipientPostalCode) missingCustomer.push("postal code");
   if (hasRecipientPostalCode && !postalSupported) {
     missingCustomer.push("supported delivery postal code");
@@ -578,9 +700,7 @@ export default function CheckoutDrawer({
     (!requiresDirectContactDetails || hasValidEmail) &&
     (!requiresDirectContactDetails || hasValidPhone) &&
     hasRecipientLine1 &&
-    hasRecipientBarangay &&
     hasRecipientCity &&
-    hasRecipientProvince &&
     hasRecipientPostalCode &&
     postalSupported &&
     (!wantsAccountCreation || (accountPasswordValid && accountPasswordConfirmValid));
@@ -1143,15 +1263,44 @@ export default function CheckoutDrawer({
                   ) : null}
                 </div>
                 {checkoutStep > 1 ? (
-                  <AppButton
-                    variant="ghost"
-                    style={{ ...styles.sendBtn, ...styles.backStepBtn }}
-                    onClick={() =>
-                      setCheckoutStep((prev) => (prev === 4 ? 3 : prev === 3 ? 2 : 1))
-                    }
-                  >
-                    Previous
-                  </AppButton>
+                  <>
+                    <AppButton
+                      variant="ghost"
+                      style={{ ...styles.sendBtn, ...styles.backStepBtn }}
+                      onClick={() =>
+                        setCheckoutStep((prev) => (prev === 4 ? 3 : prev === 3 ? 2 : 1))
+                      }
+                    >
+                      Previous
+                    </AppButton>
+                    {checkoutStep === 2 || checkoutStep === 3 ? (
+                      <AppButton
+                        style={{
+                          ...styles.sendBtn,
+                          ...styles.sideNextBtn,
+                          opacity:
+                            checkoutStep === 2
+                              ? isCustomerComplete
+                                ? 1
+                                : 0.5
+                              : isLogisticsComplete
+                                ? 1
+                                : 0.5,
+                        }}
+                        onClick={() => {
+                          if (checkoutStep === 2) {
+                            markStepAttempted(2);
+                            if (isCustomerComplete) setCheckoutStep(3);
+                            return;
+                          }
+                          markStepAttempted(3);
+                          if (isLogisticsComplete) setCheckoutStep(4);
+                        }}
+                      >
+                        Next
+                      </AppButton>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
 
@@ -1330,6 +1479,7 @@ export default function CheckoutDrawer({
                           setUseProfileAddress(false);
                           setCustomer({
                             ...customer,
+                            selected_customer_id: "",
                             placed_for_someone_else: true,
                             full_name: "",
                             email: "",
@@ -1348,6 +1498,7 @@ export default function CheckoutDrawer({
                         }
                         setCustomer({
                           ...customer,
+                          selected_customer_id: "",
                           placed_for_someone_else: false,
                         });
                       }}
@@ -1356,7 +1507,169 @@ export default function CheckoutDrawer({
                   </label>
                 ) : null}
 
-	                <div style={{ ...fieldRowStyle, ...styles.firstFieldRow }}>
+                {isAdmin && customer.placed_for_someone_else ? (
+                  <div style={fieldRowStyle}>
+                    <label style={fieldLabelStyle}>Returning customer</label>
+                    <div>
+                        <select
+                          style={styles.selectInput}
+                          value={selectedAdminCustomerId}
+                          onChange={(e) => {
+                            void handleAdminCustomerPrefill(e.target.value);
+                          }}
+                        >
+                          <option value="">Select returning customer (optional)</option>
+                        {adminCustomerOptionLabels.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                        ))}
+                        </select>
+                      {adminCustomerPrefillBusy ? (
+                        <div style={styles.adminCustomerPrefillHint}>Loading customer details...</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {lastOrderUpdateOpen && lastOrderUpdateDraft ? (
+                  <div style={styles.prefillOverlay}>
+                    <div style={styles.prefillModal}>
+                      <div style={styles.prefillTitle}>UPDATE FIELDS VALUE FROM LAST ORDER</div>
+                      <div style={styles.prefillText}>
+                        This customer is missing saved values. Review the latest order values below, amend if needed, then update the customer and fill this checkout.
+                      </div>
+                      <div style={styles.prefillGrid}>
+                        <input
+                          style={styles.input}
+                          value={lastOrderUpdateDraft.fullName}
+                          onChange={(e) =>
+                            setLastOrderUpdateDraft((prev) =>
+                              prev ? { ...prev, fullName: e.target.value } : prev
+                            )
+                          }
+                          placeholder="Full name"
+                        />
+                        <input
+                          style={styles.input}
+                          value={lastOrderUpdateDraft.email}
+                          onChange={(e) =>
+                            setLastOrderUpdateDraft((prev) =>
+                              prev ? { ...prev, email: e.target.value } : prev
+                            )
+                          }
+                          placeholder="Email"
+                        />
+                        <input
+                          style={styles.input}
+                          value={lastOrderUpdateDraft.phone}
+                          onChange={(e) =>
+                            setLastOrderUpdateDraft((prev) =>
+                              prev ? { ...prev, phone: e.target.value } : prev
+                            )
+                          }
+                          placeholder="Phone"
+                        />
+                        <input
+                          style={styles.input}
+                          value={lastOrderUpdateDraft.addressLine1}
+                          onChange={(e) =>
+                            setLastOrderUpdateDraft((prev) =>
+                              prev ? { ...prev, addressLine1: e.target.value } : prev
+                            )
+                          }
+                          placeholder="Address line 1"
+                        />
+                        <input
+                          style={styles.input}
+                          value={lastOrderUpdateDraft.postalCode}
+                          onChange={(e) =>
+                            setLastOrderUpdateDraft((prev) =>
+                              prev ? { ...prev, postalCode: e.target.value } : prev
+                            )
+                          }
+                          placeholder="Postal code"
+                        />
+                        <textarea
+                          style={styles.textarea}
+                          value={lastOrderUpdateDraft.notes}
+                          onChange={(e) =>
+                            setLastOrderUpdateDraft((prev) =>
+                              prev ? { ...prev, notes: e.target.value } : prev
+                            )
+                          }
+                          placeholder="Notes"
+                          rows={3}
+                        />
+                      </div>
+                      <div style={styles.prefillActions}>
+                        <AppButton
+                          type="button"
+                          variant="ghost"
+                          style={styles.prefillButton}
+                          onClick={() => {
+                            setLastOrderUpdateOpen(false);
+                            setLastOrderUpdateDraft(null);
+                          }}
+                        >
+                          CANCEL
+                        </AppButton>
+                        <AppButton
+                          type="button"
+                          variant="ghost"
+                          style={styles.prefillButton}
+                          disabled={lastOrderUpdateSaving}
+                          onClick={async () => {
+                            if (!lastOrderUpdateDraft) return;
+                            setLastOrderUpdateSaving(true);
+                            try {
+                              const payload = {
+                                full_name: lastOrderUpdateDraft.fullName.trim() || null,
+                                email: lastOrderUpdateDraft.email.trim() || null,
+                                phone: lastOrderUpdateDraft.phone.trim() || null,
+                                address: lastOrderUpdateDraft.addressLine1.trim() || null,
+                                address_line1: lastOrderUpdateDraft.addressLine1.trim() || null,
+                                postal_code: lastOrderUpdateDraft.postalCode.trim() || null,
+                                notes: lastOrderUpdateDraft.notes.trim() || null,
+                              };
+                              const { error } = await supabase
+                                .from("customers")
+                                .update(payload)
+                                .eq("id", lastOrderUpdateDraft.customerId);
+                              if (error) throw error;
+
+                              setCustomer({
+                                ...customer,
+                                full_name: lastOrderUpdateDraft.fullName.trim(),
+                                email: lastOrderUpdateDraft.email.trim(),
+                                phone: lastOrderUpdateDraft.phone.trim(),
+                                line1: lastOrderUpdateDraft.addressLine1.trim(),
+                                postal_code: lastOrderUpdateDraft.postalCode.trim(),
+                                notes: lastOrderUpdateDraft.notes.trim(),
+                              });
+                              setLastOrderUpdateOpen(false);
+                              setLastOrderUpdateDraft(null);
+                            } catch (error) {
+                              console.error("[checkout] failed to update customer from last order", error);
+                              alert("Failed to update customer from last order.");
+                            } finally {
+                              setLastOrderUpdateSaving(false);
+                            }
+                          }}
+                        >
+                          {lastOrderUpdateSaving ? "UPDATING..." : "UPDATE CUSTOMER"}
+                        </AppButton>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+	                <div
+                    style={{
+                      ...fieldRowStyle,
+                      ...(!isAdmin || !customer.placed_for_someone_else ? styles.firstFieldRow : null),
+                    }}
+                  >
 	                  <label style={fieldLabelStyle}>
 	                    Full name<span style={styles.req}>*</span>
 	                  </label>
@@ -1380,7 +1693,11 @@ export default function CheckoutDrawer({
                     style={styles.input}
                     value={customer.email}
                     onChange={(e) => setCustomer({ ...customer, email: e.target.value })}
-                    placeholder="e.g. juan@email.com"
+                    placeholder={
+                      requiresDirectContactDetails
+                        ? "e.g. juan@email.com"
+                        : "e.g. juan@email.com (optional)"
+                    }
                     autoComplete="email"
                   />
                 </div>
@@ -1394,7 +1711,11 @@ export default function CheckoutDrawer({
                     style={styles.input}
                     value={customer.phone}
                     onChange={(e) => setCustomer({ ...customer, phone: e.target.value })}
-                    placeholder="e.g. 09xx xxx xxxx"
+                    placeholder={
+                      requiresDirectContactDetails
+                        ? "e.g. 09xx xxx xxxx"
+                        : "e.g. 09xx xxx xxxx (optional)"
+                    }
                     autoComplete="tel"
                   />
                 </div>
@@ -1459,8 +1780,8 @@ export default function CheckoutDrawer({
                   </div>
                 ) : null}
 
-                <div style={fieldRowStyle}>
-                  <label style={fieldLabelStyle}>Address</label>
+                <div style={{ ...fieldRowStyle, alignItems: "flex-start" }}>
+                  <label style={{ ...fieldLabelStyle, ...styles.addressLabel }}>Address</label>
                   <div>
                     <input
                       style={styles.input}
@@ -1490,7 +1811,7 @@ export default function CheckoutDrawer({
                         style={styles.input}
                         value={customer.barangay}
                         onChange={(e) => setCustomer({ ...customer, barangay: e.target.value })}
-                        placeholder="Barangay"
+                        placeholder="Barangay (optional)"
                         autoComplete="shipping address-level3"
                       />
                       <input
@@ -1506,7 +1827,7 @@ export default function CheckoutDrawer({
                         style={styles.input}
                         value={customer.province}
                         onChange={(e) => setCustomer({ ...customer, province: e.target.value })}
-                        placeholder="Province"
+                        placeholder="Province (optional)"
                         autoComplete="shipping address-level1"
                       />
                       <input
@@ -2320,6 +2641,12 @@ const styles: Record<string, React.CSSProperties> = {
   firstFieldRow: {
     marginTop: 0,
   },
+  adminCustomerPrefillHint: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 1.35,
+    opacity: 0.72,
+  },
 
   req: {
     color: "rgba(255,255,255,0.7)",
@@ -2336,6 +2663,25 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--tp-text-color)",
     padding: "0 15px",
     outline: "none",
+  },
+  selectInput: {
+    width: "100%",
+    height: 40,
+    fontSize: 16,
+    borderRadius: 12,
+    border: "1px solid var(--tp-border-color-soft)",
+    backgroundColor: "transparent",
+    backgroundImage:
+      "linear-gradient(45deg, transparent 50%, rgba(255,255,255,0.88) 50%), linear-gradient(135deg, rgba(255,255,255,0.88) 50%, transparent 50%)",
+    backgroundPosition: "calc(100% - 22px) 17px, calc(100% - 16px) 17px",
+    backgroundSize: "6px 6px, 6px 6px",
+    backgroundRepeat: "no-repeat",
+    color: "var(--tp-text-color)",
+    padding: "0 42px 0 15px",
+    outline: "none",
+    appearance: "none",
+    WebkitAppearance: "none",
+    MozAppearance: "none",
   },
 
   textarea: {
@@ -2427,6 +2773,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
     minHeight: 40,
+  },
+  addressLabel: {
+    paddingTop: 10,
   },
   notesLabel: {
     paddingTop: 10,
@@ -2640,6 +2989,9 @@ const styles: Record<string, React.CSSProperties> = {
     background: "transparent",
     color: "var(--tp-text-color)",
     textTransform: "uppercase",
+  },
+  sideNextBtn: {
+    marginTop: 12,
   },
 
   reqHint: {
@@ -3147,6 +3499,47 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: 10,
+  },
+  prefillOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.62)",
+    zIndex: 1400,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  prefillModal: {
+    width: "min(720px, calc(100vw - 32px))",
+    background: "rgba(18,18,18,0.96)",
+    border: "1px solid var(--tp-border-color-soft)",
+    borderRadius: 14,
+    padding: 18,
+    display: "grid",
+    gap: 14,
+  },
+  prefillTitle: {
+    fontSize: 15,
+    fontWeight: 900,
+    letterSpacing: 1.4,
+  },
+  prefillText: {
+    fontSize: 14,
+    lineHeight: 1.45,
+    opacity: 0.84,
+  },
+  prefillGrid: {
+    display: "grid",
+    gap: 10,
+  },
+  prefillActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  prefillButton: {
+    minWidth: 164,
   },
   previewTop: {
     display: "flex",
