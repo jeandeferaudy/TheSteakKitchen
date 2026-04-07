@@ -97,7 +97,4 @@ If local or production behavior looks inconsistent, first verify that the latest
 
 ## To Do
 
-- test all ordering scenarios with and without credits
-- add referral Steak Credits program
 - add promotions
-- add a magic invitation link to invite past customers

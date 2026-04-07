@@ -97,6 +97,8 @@ import {
   ensureCustomerRecord,
   fetchAdminCustomers,
   findCustomerByEmail,
+  findCustomerByReferralCode,
+  findReferralReuseConflict,
   fetchCustomerById,
   linkProfileToCustomer,
   mergeCustomers,
@@ -138,6 +140,26 @@ const DEFAULT_ZONE_STYLES_BY_MODE: Record<"dark" | "light", Record<ZoneName, Zon
     main: { ...DEFAULT_ZONE_STYLES.main },
   },
 };
+
+function normalizeReferralEmail(value: string | null | undefined): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeReferralPhone(value: string | null | undefined): string {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("63") && digits.length >= 12) return digits.slice(-10);
+  if (digits.startsWith("0") && digits.length >= 11) return digits.slice(-10);
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
+function normalizeReferralLine1(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ");
+}
 
 const FONT_OPTIONS: FontOption[] = [
   { id: "inter", name: "Inter", style: "Modern Sans" },
@@ -4717,6 +4739,10 @@ React.useEffect(() => {
     } = await supabase.auth.getUser();
     let user = authUser;
     let linkedCheckoutCustomerId: string | null = null;
+    let resolvedReferralCode: string | null = null;
+    let resolvedReferrerCustomerId: string | null = null;
+    let resolvedReferralDiscountAmount = 0;
+    let resolvedReferralRewardCredits = 0;
 
     if (!user?.id && createAccountFromDetails) {
       try {
@@ -4746,6 +4772,58 @@ React.useEffect(() => {
       linkedCheckoutCustomerId = linkedProfile?.customer_id
         ? String(linkedProfile.customer_id)
         : null;
+    }
+
+    const referralCodeInput = String(payload.referral_code ?? "").trim().toUpperCase();
+    if (referralCodeInput && !customer.placed_for_someone_else) {
+      const referralCustomer = await findCustomerByReferralCode(referralCodeInput).catch(() => null);
+      if (!referralCustomer || !referralCustomer.steak_credits_enabled) {
+        alert("Referral code not found.");
+        return;
+      }
+
+      const checkoutCustomerRecord = linkedCheckoutCustomerId
+        ? await fetchCustomerById(linkedCheckoutCustomerId).catch(() => null)
+        : null;
+      if (checkoutCustomerRecord?.id === referralCustomer.id) {
+        alert("You cannot use your own referral code.");
+        return;
+      }
+
+      const sameEmail =
+        normalizeReferralEmail(customer.email) &&
+        normalizeReferralEmail(customer.email) === normalizeReferralEmail(referralCustomer.email);
+      const samePhone =
+        normalizeReferralPhone(customer.phone) &&
+        normalizeReferralPhone(customer.phone) === normalizeReferralPhone(referralCustomer.phone);
+      const sameLine1 =
+        normalizeReferralLine1(customer.line1) &&
+        normalizeReferralLine1(customer.line1) === normalizeReferralLine1(referralCustomer.address_line1);
+      if (sameEmail || samePhone || sameLine1) {
+        alert("You cannot use your own referral code.");
+        return;
+      }
+
+      const referralConflict = await findReferralReuseConflict({
+        email: customer.email.trim() || null,
+        phone: customer.phone.trim() || null,
+        addressLine1: customer.line1.trim() || null,
+      }).catch(() => null);
+      if (referralConflict) {
+        alert(
+          referralConflict.matchedOn === "address"
+            ? "This address has already been used with a referral code."
+            : referralConflict.matchedOn === "phone"
+              ? "This phone number has already been used with a referral code."
+              : "This email has already been used with a referral code."
+        );
+        return;
+      }
+
+      resolvedReferralCode = referralCodeInput;
+      resolvedReferrerCustomerId = referralCustomer.id;
+      resolvedReferralDiscountAmount = Math.max(0, Number(payload.referral_discount_amount ?? 0));
+      resolvedReferralRewardCredits = calculateSteakCredits(payload.subtotal);
     }
 
     const ext = paymentFile.name.includes(".")
@@ -5013,12 +5091,20 @@ React.useEffect(() => {
       }
       if (user?.id) {
         const steakCreditsEarned = calculateSteakCredits(payload.subtotal);
+        const orderRewardPayload: Record<string, unknown> = {
+          steak_credits_earned: steakCreditsEarned,
+          steak_credits_granted: false,
+        };
+        if (resolvedReferralCode && resolvedReferrerCustomerId) {
+          orderRewardPayload.referral_code = resolvedReferralCode;
+          orderRewardPayload.referrer_customer_id = resolvedReferrerCustomerId;
+          orderRewardPayload.referral_discount_amount = resolvedReferralDiscountAmount;
+          orderRewardPayload.referral_reward_credits = resolvedReferralRewardCredits;
+          orderRewardPayload.referral_credits_granted = false;
+        }
         const { error: creditsError } = await supabase
           .from("orders")
-          .update({
-            steak_credits_earned: steakCreditsEarned,
-            steak_credits_granted: false,
-          })
+          .update(orderRewardPayload)
           .eq("id", orderId);
         if (creditsError) {
           console.warn("[checkout] steak credits preview update failed:", creditsError.message);
@@ -5033,6 +5119,21 @@ React.useEffect(() => {
         await hydrateOrderLineFinancialSnapshots(orderId);
       } catch (financialErr) {
         console.warn("[checkout] order line financial snapshot update failed:", financialErr);
+      }
+      if (!user?.id && resolvedReferralCode && resolvedReferrerCustomerId) {
+        const { error: referralError } = await supabase
+          .from("orders")
+          .update({
+            referral_code: resolvedReferralCode,
+            referrer_customer_id: resolvedReferrerCustomerId,
+            referral_discount_amount: resolvedReferralDiscountAmount,
+            referral_reward_credits: resolvedReferralRewardCredits,
+            referral_credits_granted: false,
+          })
+          .eq("id", orderId);
+        if (referralError) {
+          console.warn("[checkout] referral metadata update failed:", referralError.message);
+        }
       }
     }
 

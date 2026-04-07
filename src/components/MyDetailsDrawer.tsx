@@ -77,6 +77,7 @@ export default function MyDetailsDrawer({
   const [availableSteakCredits, setAvailableSteakCredits] = React.useState(0);
   const [steakCreditsEnabled, setSteakCreditsEnabled] = React.useState(false);
   const [linkedCustomerId, setLinkedCustomerId] = React.useState<string | null>(null);
+  const [referralCopied, setReferralCopied] = React.useState(false);
   const lastSavedRef = React.useRef<string>("");
 
   React.useEffect(() => {
@@ -196,25 +197,17 @@ export default function MyDetailsDrawer({
     loadProfile();
   }, [isOpen, onProfileSaved, userId]);
 
-  if (!isOpen) return null;
-
-  const panelTop = Math.max(topOffset, 0);
-  const panelHeight = `calc(100vh - ${panelTop}px)`;
-  const rowStyle = isWideDesktop
-    ? styles.fieldRowDesktop
-    : isMobileViewport
-      ? styles.fieldRowMobileAligned
-      : styles.fieldRowMobile;
-  const labelStyle = isWideDesktop || isMobileViewport ? styles.labelDesktop : styles.label;
-  const textAreaRowStyle = isWideDesktop
-    ? { ...styles.fieldRowDesktop, alignItems: "start" }
-    : isMobileViewport
-      ? { ...styles.fieldRowMobileAligned, alignItems: "start" }
-      : styles.fieldRowMobile;
   const showSteakCredits =
     typeof steakCreditsEnabledProp === "boolean"
       ? steakCreditsEnabledProp
       : steakCreditsEnabled;
+  const referralCode = React.useMemo(() => {
+    const baseId = String(linkedCustomerId ?? userId ?? "")
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .toUpperCase();
+    if (!baseId) return "";
+    return `TSK-${baseId.slice(-8)}`;
+  }, [linkedCustomerId, userId]);
 
   const setField = (k: keyof Draft, v: string) => {
     setSaved(false);
@@ -329,6 +322,28 @@ export default function MyDetailsDrawer({
     e.currentTarget.blur();
   };
 
+  React.useEffect(() => {
+    if (!referralCopied) return;
+    const timer = window.setTimeout(() => setReferralCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [referralCopied]);
+
+  if (!isOpen) return null;
+
+  const panelTop = Math.max(topOffset, 0);
+  const panelHeight = `calc(100vh - ${panelTop}px)`;
+  const rowStyle = isWideDesktop
+    ? styles.fieldRowDesktop
+    : isMobileViewport
+      ? styles.fieldRowMobileAligned
+      : styles.fieldRowMobile;
+  const labelStyle = isWideDesktop || isMobileViewport ? styles.labelDesktop : styles.label;
+  const textAreaRowStyle = isWideDesktop
+    ? { ...styles.fieldRowDesktop, alignItems: "start" }
+    : isMobileViewport
+      ? { ...styles.fieldRowMobileAligned, alignItems: "start" }
+      : styles.fieldRowMobile;
+
   return (
     <>
       <div
@@ -375,12 +390,50 @@ export default function MyDetailsDrawer({
           }}
         >
           {showSteakCredits ? (
-            <div style={styles.creditsCard}>
-              <div style={styles.creditsRow}>
-                <div style={styles.creditsTitle}>
-                  Available Steak Credits: {formatCurrencyPHP(availableSteakCredits)}
+            <div style={{ ...styles.cardRow, ...(isMobileViewport ? styles.cardRowMobile : null) }}>
+              <div style={styles.creditsCard}>
+                <div style={styles.creditsRow}>
+                  <div style={styles.creditsTitle}>
+                    Available Steak Credits: {formatCurrencyPHP(availableSteakCredits)}
+                  </div>
+                  <div style={styles.creditsSubtext}>Available to use for your next order.</div>
                 </div>
-                <div style={styles.creditsSubtext}>Available to use for your next order.</div>
+              </div>
+              <div style={styles.creditsCard}>
+                <div style={styles.referralHeader}>
+                  <div style={styles.referralTitle}>
+                    Earn voucher by inviting new customers to use your referral code
+                  </div>
+                  <div style={styles.referralCodeWrap}>
+                    <span style={styles.referralCode}>{referralCode || "—"}</span>
+                    <button
+                      type="button"
+                      style={{
+                        ...styles.copyBtn,
+                        ...(referralCopied ? styles.copyBtnCopied : null),
+                      }}
+                      onClick={async () => {
+                        if (!referralCode) return;
+                        try {
+                          await navigator.clipboard.writeText(referralCode);
+                          setReferralCopied(true);
+                        } catch {
+                          // Clipboard may be unavailable in some contexts.
+                        }
+                      }}
+                      aria-label="Copy referral code"
+                      title="Copy referral code"
+                    >
+                      <svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden>
+                        <rect x="7" y="3" width="10" height="10" rx="2.1" stroke="currentColor" strokeWidth="1.7" />
+                        <rect x="4" y="6" width="10" height="10" rx="2.1" stroke="currentColor" strokeWidth="1.7" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <div style={{ ...styles.creditsSubtext, ...styles.referralSubtext }}>
+                  When a new customer uses your referral code during checkout, they get 5% discount on their first order and 5% of their spending will be credited to your account in Steak Credits.
+                </div>
               </div>
             </div>
           ) : null}
@@ -623,9 +676,18 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
     color: "var(--tp-text-color)",
   },
-  creditsCard: {
+  cardRow: {
     maxWidth: "min(1120px, 100%)",
     marginBottom: 20,
+    display: "grid",
+    gridTemplateColumns: "1fr",
+    gap: 16,
+    alignItems: "stretch",
+  },
+  cardRowMobile: {
+    gridTemplateColumns: "1fr",
+  },
+  creditsCard: {
     padding: "16px 18px",
     borderRadius: 14,
     border: "1px solid var(--tp-accent)",
@@ -650,6 +712,57 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.4,
     textAlign: "right",
     whiteSpace: "nowrap",
+  },
+  referralHeader: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 14,
+    flexWrap: "wrap",
+  },
+  referralTitle: {
+    flex: "1 1 280px",
+    fontSize: 17,
+    fontWeight: 800,
+    lineHeight: 1.35,
+  },
+  referralCodeWrap: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
+  referralCode: {
+    fontSize: 15,
+    fontWeight: 900,
+    letterSpacing: 1.1,
+    color: "var(--tp-text-color)",
+  },
+  copyBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    border: "1px solid rgba(184, 153, 88, 0.5)",
+    background: "rgba(184, 153, 88, 0.1)",
+    color: "var(--tp-accent)",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    padding: 0,
+  },
+  copyBtnCopied: {
+    border: "1px solid rgba(103,191,138,0.65)",
+    background: "rgba(103,191,138,0.18)",
+    color: "#67bf8a",
+  },
+  referralSubtext: {
+    marginTop: 10,
+    textAlign: "left",
+    whiteSpace: "normal",
+    fontSize: 14,
+    lineHeight: 1.45,
   },
   addressSectionLabel: {
     marginTop: 20,

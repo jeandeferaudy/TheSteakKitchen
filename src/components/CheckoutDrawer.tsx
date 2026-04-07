@@ -11,6 +11,10 @@ import {
   getDeliveryPricingMatrixRows,
   type DeliveryRule,
 } from "@/lib/deliveryPricing";
+import {
+  findReferralReuseConflict,
+  findCustomerByReferralCode,
+} from "@/lib/customersApi";
 import { calculateSteakCredits, formatCurrencyPHP } from "@/lib/money";
 import { supabase } from "@/lib/supabase";
 
@@ -30,6 +34,26 @@ function ordinalDay(n: number): string {
   if (r === 2) return `${n}nd`;
   if (r === 3) return `${n}rd`;
   return `${n}th`;
+}
+
+function normalizeReferralEmail(value: string | null | undefined): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeReferralPhone(value: string | null | undefined): string {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("63") && digits.length >= 12) return digits.slice(-10);
+  if (digits.startsWith("0") && digits.length >= 11) return digits.slice(-10);
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
+function normalizeReferralLine1(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ");
 }
 
 type LastOrderUpdateDraft = {
@@ -169,6 +193,16 @@ export default function CheckoutDrawer({
   const [proofPreviewOpen, setProofPreviewOpen] = React.useState(false);
   const [proofPreviewUrl, setProofPreviewUrl] = React.useState<string | null>(null);
   const [copyNoticeVisible, setCopyNoticeVisible] = React.useState(false);
+  const [referralCodeDraft, setReferralCodeDraft] = React.useState("");
+  const [referralAppliedCode, setReferralAppliedCode] = React.useState("");
+  const [referralReferrerId, setReferralReferrerId] = React.useState<string | null>(null);
+  const [referralReferrerName, setReferralReferrerName] = React.useState("");
+  const [referralReferrerEmail, setReferralReferrerEmail] = React.useState("");
+  const [referralReferrerPhone, setReferralReferrerPhone] = React.useState("");
+  const [referralReferrerLine1, setReferralReferrerLine1] = React.useState("");
+  const [referralError, setReferralError] = React.useState("");
+  const [referralApplying, setReferralApplying] = React.useState(false);
+  const [referralBlocked, setReferralBlocked] = React.useState(false);
   const [datePickerOpen, setDatePickerOpen] = React.useState(false);
   const [timePickerOpen, setTimePickerOpen] = React.useState(false);
   const datePickerWrapRef = React.useRef<HTMLDivElement | null>(null);
@@ -526,6 +560,7 @@ export default function CheckoutDrawer({
   const grandTotal = computedTotal + deliveryFee + referBagFee;
   const hasOutOfStockItems = summaryLines.some((li: any) => Boolean(li?.outOfStock));
   const isOnBehalfMode = Boolean(isAdmin && customer.placed_for_someone_else);
+  const canUseReferralCode = !isLoggedIn && !customer.placed_for_someone_else;
   const canApplySteakCredits = isLoggedIn && steakCreditsEnabled && !isOnBehalfMode;
   const summaryCreditsBase = checkoutStep === 1 ? computedTotal : grandTotal;
   const steakCreditsApplied = canApplySteakCredits
@@ -534,8 +569,10 @@ export default function CheckoutDrawer({
   const payableSteakCreditsApplied = canApplySteakCredits
     ? Math.min(Math.max(0, Number(availableSteakCredits) || 0), Math.max(0, grandTotal))
     : 0;
-  const payableTotal = Math.max(0, grandTotal - payableSteakCreditsApplied);
-  const displayedTotal = Math.max(0, summaryCreditsBase - steakCreditsApplied);
+  const referralDiscountAmount =
+    canUseReferralCode && referralReferrerId ? Math.max(0, calculateSteakCredits(computedTotal)) : 0;
+  const payableTotal = Math.max(0, grandTotal - payableSteakCreditsApplied - referralDiscountAmount);
+  const displayedTotal = Math.max(0, summaryCreditsBase - steakCreditsApplied - referralDiscountAmount);
   const requiresDirectContactDetails = !isOnBehalfMode;
   const hasValidEmail =
     customer.email.trim().length === 0
@@ -546,6 +583,10 @@ export default function CheckoutDrawer({
   const hasRecipientLine1 = customer.line1.trim().length > 0;
   const hasRecipientCity = customer.city.trim().length > 0;
   const hasRecipientPostalCode = customer.postal_code.trim().length > 0;
+  const referralIdentityReady =
+    customer.email.trim().length > 0 ||
+    customer.phone.trim().length > 0 ||
+    customer.line1.trim().length > 0;
   const steakCreditsEstimate = useMemo(
     () => calculateSteakCredits(computedTotal),
     [computedTotal]
@@ -556,6 +597,136 @@ export default function CheckoutDrawer({
   const accountPasswordConfirmValid =
     createAccountPasswordConfirm.trim().length > 0 &&
     createAccountPassword === createAccountPasswordConfirm;
+
+  const clearReferralState = React.useCallback(() => {
+    setReferralAppliedCode("");
+    setReferralReferrerId(null);
+    setReferralReferrerName("");
+    setReferralReferrerEmail("");
+    setReferralReferrerPhone("");
+    setReferralReferrerLine1("");
+    setReferralError("");
+    setReferralBlocked(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (!canUseReferralCode) {
+      setReferralCodeDraft("");
+      clearReferralState();
+    }
+  }, [canUseReferralCode, clearReferralState]);
+
+  const applyReferralCode = React.useCallback(async () => {
+    const code = referralCodeDraft.trim().toUpperCase();
+    if (!canUseReferralCode) {
+      clearReferralState();
+      return;
+    }
+    if (!code) {
+      clearReferralState();
+      return;
+    }
+
+    setReferralApplying(true);
+    setReferralError("");
+    try {
+      const referrer = await findCustomerByReferralCode(code);
+      if (!referrer || !referrer.steak_credits_enabled) {
+        throw new Error("Referral code not found.");
+      }
+
+      setReferralAppliedCode(code);
+      setReferralReferrerId(referrer.id);
+      setReferralReferrerName(referrer.full_name || "Referrer");
+      setReferralReferrerEmail(String(referrer.email ?? ""));
+      setReferralReferrerPhone(String(referrer.phone ?? ""));
+      setReferralReferrerLine1(String(referrer.address_line1 ?? ""));
+      setReferralError("");
+      setReferralBlocked(false);
+    } catch (error) {
+      setReferralAppliedCode("");
+      setReferralReferrerId(null);
+      setReferralReferrerName("");
+      setReferralReferrerEmail("");
+      setReferralReferrerPhone("");
+      setReferralReferrerLine1("");
+      setReferralBlocked(false);
+      setReferralError(error instanceof Error ? error.message : "Failed to apply referral code.");
+    } finally {
+      setReferralApplying(false);
+    }
+  }, [canUseReferralCode, clearReferralState, referralCodeDraft]);
+
+  React.useEffect(() => {
+    if (!canUseReferralCode || !referralAppliedCode || !referralReferrerId) {
+      setReferralBlocked(false);
+      return;
+    }
+    if (!referralIdentityReady) {
+      setReferralBlocked(false);
+      setReferralError("");
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const sameEmail =
+          normalizeReferralEmail(customer.email) &&
+          normalizeReferralEmail(customer.email) === normalizeReferralEmail(referralReferrerEmail);
+        const samePhone =
+          normalizeReferralPhone(customer.phone) &&
+          normalizeReferralPhone(customer.phone) === normalizeReferralPhone(referralReferrerPhone);
+        const sameLine1 =
+          normalizeReferralLine1(customer.line1) &&
+          normalizeReferralLine1(customer.line1) === normalizeReferralLine1(referralReferrerLine1);
+        if (sameEmail || samePhone || sameLine1) {
+          setReferralBlocked(true);
+          setReferralError("You cannot use your own referral code.");
+          return;
+        }
+
+        const conflict = await findReferralReuseConflict({
+          email: customer.email.trim() || null,
+          phone: customer.phone.trim() || null,
+          addressLine1: customer.line1.trim() || null,
+        });
+        if (cancelled) return;
+        if (conflict) {
+          setReferralBlocked(true);
+          setReferralError(
+            conflict.matchedOn === "address"
+              ? "This address has already been used with a referral code."
+              : conflict.matchedOn === "phone"
+                ? "This phone number has already been used with a referral code."
+                : "This email has already been used with a referral code."
+          );
+          return;
+        }
+        setReferralBlocked(false);
+        setReferralError("");
+      } catch {
+        if (cancelled) return;
+        setReferralBlocked(true);
+        setReferralError("Referral validation failed. Please try again.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    canUseReferralCode,
+    customer.email,
+    customer.line1,
+    customer.phone,
+    referralAppliedCode,
+    referralIdentityReady,
+    referralReferrerEmail,
+    referralReferrerId,
+    referralReferrerLine1,
+    referralReferrerPhone,
+  ]);
 
   const isCheckoutValid =
     hasRecipientName &&
@@ -569,6 +740,7 @@ export default function CheckoutDrawer({
     customer.delivery_slot.trim().length > 0 &&
     (!isWithin2h || customer.express_delivery) &&
     (!requiresProof || !!paymentFile) &&
+    !referralBlocked &&
     !summaryLines.some((li: any) => Boolean(li?.outOfStock));
   React.useEffect(() => {
     if (!isOpen) {
@@ -598,7 +770,12 @@ export default function CheckoutDrawer({
   if (!customer.delivery_slot.trim()) missingCustomer.push("delivery time");
   const missingProof = requiresProof && !paymentFile;
   const missingStock = hasOutOfStockItems;
-  const missingTotal = missingCustomer.length + (missingProof ? 1 : 0) + (missingStock ? 1 : 0);
+  const missingReferral = referralBlocked;
+  const missingTotal =
+    missingCustomer.length +
+    (missingProof ? 1 : 0) +
+    (missingStock ? 1 : 0) +
+    (missingReferral ? 1 : 0);
 
   let missingHint = "";
   if (missingTotal === 0) {
@@ -608,18 +785,23 @@ export default function CheckoutDrawer({
       ...missingCustomer,
       ...(missingProof ? ["payment proof"] : []),
       ...(missingStock ? ["out-of-stock items removed"] : []),
+      ...(missingReferral ? ["a valid non-reused referral identity"] : []),
     ];
     missingHint = `Please add: ${specific.join(" and ")}.`;
   } else if (missingCustomer.length >= 3 && missingProof) {
     missingHint = "Please complete your customer details and upload payment proof.";
   } else if (missingCustomer.length >= 3) {
     missingHint = "Please complete your customer details section.";
+  } else if (missingReferral) {
+    missingHint = "This referral code has already been used with this customer identity.";
   } else {
     missingHint = "Please upload payment proof to continue.";
   }
   const missingWhat =
     missingTotal === 1 && missingProof && missingCustomer.length === 0
       ? "payment proof"
+      : missingTotal === 1 && missingReferral && missingCustomer.length === 0 && !missingProof
+        ? "a valid referral identity"
       : missingStock
         ? "out-of-stock items removed"
         : missingCustomer.length
@@ -1197,6 +1379,59 @@ export default function CheckoutDrawer({
                       <div style={styles.summaryMinorLabel}>Steak Credits Applied</div>
                       <div style={{ ...styles.summaryMinorValue, color: "var(--tp-accent)" }}>
                         - ₱ {formatMoney(steakCreditsApplied)}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {canUseReferralCode ? (
+                    <div style={{ ...styles.referralBox, ...styles.summaryIndentedBlock }}>
+                      <div style={styles.referralInputRow}>
+                        <input
+                          value={referralCodeDraft}
+                          onChange={(e) => {
+                            setReferralCodeDraft(e.target.value.toUpperCase());
+                            if (referralError) setReferralError("");
+                          }}
+                          onBlur={() => {
+                            void applyReferralCode();
+                          }}
+                          placeholder="Referral code"
+                          style={styles.referralInput}
+                        />
+                        <AppButton
+                          type="button"
+                          variant="ghost"
+                          style={styles.referralApplyBtn}
+                          onClick={() => {
+                            void applyReferralCode();
+                          }}
+                          disabled={referralApplying}
+                        >
+                          {referralApplying ? "APPLYING..." : "APPLY"}
+                        </AppButton>
+                      </div>
+                      {referralAppliedCode ? (
+                        <div style={styles.referralAppliedNote}>
+                          {referralReferrerName
+                            ? `Referral applied from ${referralReferrerName}.`
+                            : "Referral applied."}
+                        </div>
+                      ) : null}
+                      {referralError ? <div style={styles.referralError}>{referralError}</div> : null}
+                    </div>
+                  ) : null}
+
+                  {referralDiscountAmount > 0 ? (
+                    <div
+                      style={{
+                        ...styles.summaryTotalRow,
+                        ...styles.summaryTotalRowNoLine,
+                        ...styles.summaryIndentedRow,
+                      }}
+                    >
+                      <div style={styles.summaryMinorLabel}>Referral Discount</div>
+                      <div style={{ ...styles.summaryMinorValue, color: "var(--tp-accent)" }}>
+                        - ₱ {formatMoney(referralDiscountAmount)}
                       </div>
                     </div>
                   ) : null}
@@ -2250,11 +2485,21 @@ export default function CheckoutDrawer({
                           if (submitting) return;
 	                        markStepAttempted(4);
 	                        if (!isCheckoutValid) return;
+                          if (
+                            canUseReferralCode &&
+                            referralCodeDraft.trim() &&
+                            referralCodeDraft.trim().toUpperCase() !== referralAppliedCode
+                          ) {
+                            setReferralError("Apply the referral code first.");
+                            return;
+                          }
 	                        onSubmit({
                           subtotal: computedTotal,
                           delivery_fee: deliveryFee,
                           thermal_bag_fee: referBagFee,
                           steak_credits_applied: payableSteakCreditsApplied,
+                          referral_code: referralAppliedCode || null,
+                          referral_discount_amount: referralDiscountAmount,
                           total: payableTotal,
                           postal_code: customer.postal_code,
                           delivery_date: customer.delivery_date,
@@ -2791,6 +3036,55 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.45,
     color: "var(--tp-accent)",
     fontWeight: 700,
+  },
+  referralBox: {
+    marginTop: 10,
+    display: "grid",
+    gap: 8,
+  },
+  referralTitle: {
+    fontSize: 14,
+    fontWeight: 800,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: "var(--tp-text-color)",
+  },
+  referralInputRow: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  referralInput: {
+    flex: "1 1 180px",
+    minWidth: 0,
+    height: 36,
+    borderRadius: 10,
+    border: "1px solid var(--tp-border-color)",
+    background: "var(--tp-control-bg-soft)",
+    color: "var(--tp-text-color)",
+    padding: "0 12px",
+    fontSize: 15,
+    textTransform: "uppercase",
+  },
+  referralApplyBtn: {
+    height: 36,
+    minWidth: 94,
+    borderRadius: 10,
+    fontSize: 14,
+    fontWeight: 800,
+    letterSpacing: 0.8,
+  },
+  referralAppliedNote: {
+    fontSize: 13,
+    color: "#67bf8a",
+    fontWeight: 700,
+    lineHeight: 1.4,
+  },
+  referralError: {
+    fontSize: 13,
+    color: "#ff9f9f",
+    lineHeight: 1.4,
   },
   steakCreditsBox: {
     marginTop: 12,

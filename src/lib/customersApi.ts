@@ -2,7 +2,7 @@ import { supabase } from "@/lib/supabase";
 import { fetchOrders, type OrderListItem } from "@/lib/ordersApi";
 
 const CUSTOMER_SELECT =
-  "id,first_name,last_name,full_name,phone,email,address,notes,attention_to,address_line1,address_line2,barangay,city,province,postal_code,country,delivery_note,created_at,available_steak_credits,steak_credits_enabled";
+  "id,first_name,last_name,full_name,phone,email,address,notes,attention_to,address_line1,address_line2,barangay,city,province,postal_code,country,delivery_note,created_at,available_steak_credits,steak_credits_enabled,referral_code";
 const CUSTOMER_SELECT_LEGACY =
   "id,first_name,last_name,full_name,phone,email,address,notes,created_at,available_steak_credits";
 
@@ -57,6 +57,7 @@ export type CustomerRecord = {
   created_at?: string | null;
   available_steak_credits: number;
   steak_credits_enabled: boolean;
+  referral_code?: string | null;
 };
 
 export type CustomerAdminDetail = {
@@ -84,6 +85,14 @@ function normalizeKey(value: string | null | undefined): string {
 
 function normalizePhone(value: string | null | undefined): string {
   return normalizeText(value).replace(/\D/g, "");
+}
+
+function normalizeAddressLine1(value: string | null | undefined): string {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isMissingSteakCreditsEnabledColumn(error: unknown): boolean {
@@ -140,6 +149,7 @@ function mapCustomerRecord(row: Record<string, unknown>): CustomerRecord {
     created_at: row.created_at == null ? null : String(row.created_at),
     available_steak_credits: Number(row.available_steak_credits ?? 0),
     steak_credits_enabled: Boolean(row.steak_credits_enabled),
+    referral_code: row.referral_code == null ? null : String(row.referral_code),
   };
 }
 
@@ -197,6 +207,123 @@ export async function findCustomerByEmail(email: string | null | undefined): Pro
     .filter((row) => normalizeKey(row.email) === emailKey);
 
   return matches.length === 1 ? matches[0] : null;
+}
+
+export async function findCustomerByReferralCode(
+  referralCode: string | null | undefined
+): Promise<CustomerRecord | null> {
+  const code = normalizeText(referralCode).toUpperCase();
+  if (!code) return null;
+
+  const { data, error } = await selectCustomerRows<Record<string, unknown>[]>((columns) =>
+    supabase.from("customers").select(columns).ilike("referral_code", code).limit(20)
+  );
+  if (error) throw error;
+
+  const matches = (data ?? [])
+    .map((row) => mapCustomerRecord(row as Record<string, unknown>))
+    .filter((row) => normalizeText(row.referral_code).toUpperCase() === code);
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export async function countCustomerOrders(customerId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("orders")
+    .select("id", { count: "exact", head: true })
+    .eq("customer_id", customerId);
+  if (error) throw error;
+  return Number(count ?? 0);
+}
+
+export type ReferralReuseConflict = {
+  orderId: string;
+  customerId: string | null;
+  matchedOn: "email" | "phone" | "address";
+};
+
+export async function findReferralReuseConflict(input: {
+  email?: string | null;
+  phone?: string | null;
+  addressLine1?: string | null;
+}): Promise<ReferralReuseConflict | null> {
+  const emailKey = normalizeKey(input.email);
+  const phoneDigits = normalizePhone(input.phone);
+  const phoneSuffix = phoneDigits.length >= 10 ? phoneDigits.slice(-10) : phoneDigits;
+  const addressKey = normalizeAddressLine1(input.addressLine1);
+
+  if (!emailKey && !phoneSuffix && !addressKey) return null;
+
+  if (emailKey) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id,customer_id,email")
+      .not("referral_code", "is", null)
+      .ilike("email", emailKey)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (error) throw error;
+
+    const match = (data ?? []).find(
+      (row) => normalizeKey(String((row as Record<string, unknown>).email ?? "")) === emailKey
+    ) as Record<string, unknown> | undefined;
+    if (match) {
+      return {
+        orderId: String(match.id ?? ""),
+        customerId: match.customer_id == null ? null : String(match.customer_id),
+        matchedOn: "email",
+      };
+    }
+  }
+
+  if (phoneSuffix) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id,customer_id,phone")
+      .not("referral_code", "is", null)
+      .ilike("phone", `%${phoneSuffix}`)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) throw error;
+
+    const match = (data ?? []).find((row) => {
+      const rowPhone = normalizePhone(String((row as Record<string, unknown>).phone ?? ""));
+      return rowPhone === phoneDigits || rowPhone.endsWith(phoneSuffix);
+    }) as Record<string, unknown> | undefined;
+    if (match) {
+      return {
+        orderId: String(match.id ?? ""),
+        customerId: match.customer_id == null ? null : String(match.customer_id),
+        matchedOn: "phone",
+      };
+    }
+  }
+
+  if (addressKey) {
+    const searchTerm = addressKey.split(" ").filter(Boolean).slice(0, 4).join("%");
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id,customer_id,address")
+      .not("referral_code", "is", null)
+      .ilike("address", `%${searchTerm}%`)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) throw error;
+
+    const match = (data ?? []).find((row) => {
+      const rowAddress = normalizeAddressLine1(String((row as Record<string, unknown>).address ?? ""));
+      return rowAddress.includes(addressKey);
+    }) as Record<string, unknown> | undefined;
+    if (match) {
+      return {
+        orderId: String(match.id ?? ""),
+        customerId: match.customer_id == null ? null : String(match.customer_id),
+        matchedOn: "address",
+      };
+    }
+  }
+
+  return null;
 }
 
 export async function ensureCustomerForAccountSignup(input: {
