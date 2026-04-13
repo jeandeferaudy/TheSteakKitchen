@@ -102,6 +102,8 @@ type Props = {
   isAdmin?: boolean;
   isLoggedIn?: boolean;
   steakCreditsEnabled?: boolean;
+  offerSteakCreditsToGuests?: boolean;
+  autoActivateSteakCreditsForNewAccounts?: boolean;
   availableSteakCredits?: number;
   createAccountFromDetails?: boolean;
   setCreateAccountFromDetails?: (next: boolean) => void;
@@ -149,6 +151,8 @@ export default function CheckoutDrawer({
   isAdmin = false,
   isLoggedIn = false,
   steakCreditsEnabled = false,
+  offerSteakCreditsToGuests = false,
+  autoActivateSteakCreditsForNewAccounts = false,
   availableSteakCredits = 0,
   createAccountFromDetails = false,
   setCreateAccountFromDetails,
@@ -562,6 +566,7 @@ export default function CheckoutDrawer({
   const isOnBehalfMode = Boolean(isAdmin && customer.placed_for_someone_else);
   const canUseReferralCode = !isLoggedIn && !customer.placed_for_someone_else;
   const canApplySteakCredits = isLoggedIn && steakCreditsEnabled && !isOnBehalfMode;
+  const showGuestSteakCreditsOffer = !isLoggedIn && offerSteakCreditsToGuests && !isOnBehalfMode;
   const summaryCreditsBase = checkoutStep === 1 ? computedTotal : grandTotal;
   const steakCreditsApplied = canApplySteakCredits
     ? Math.min(Math.max(0, Number(availableSteakCredits) || 0), Math.max(0, summaryCreditsBase))
@@ -622,6 +627,19 @@ export default function CheckoutDrawer({
       setCreateAccountFromDetails(false);
     }
   }, [createAccountFromDetails, customer.placed_for_someone_else, setCreateAccountFromDetails]);
+
+  React.useEffect(() => {
+    if (!showGuestSteakCreditsOffer || !autoActivateSteakCreditsForNewAccounts || !setCreateAccountFromDetails) {
+      return;
+    }
+    if (createAccountFromDetails) return;
+    setCreateAccountFromDetails(true);
+  }, [
+    autoActivateSteakCreditsForNewAccounts,
+    createAccountFromDetails,
+    setCreateAccountFromDetails,
+    showGuestSteakCreditsOffer,
+  ]);
 
   const applyReferralCode = React.useCallback(async () => {
     const code = referralCodeDraft.trim().toUpperCase();
@@ -2119,7 +2137,7 @@ export default function CheckoutDrawer({
                 </div>
                 </div>
 
-                {!isLoggedIn && steakCreditsEnabled && setCreateAccountFromDetails ? (
+                {showGuestSteakCreditsOffer && setCreateAccountFromDetails ? (
                   <div style={styles.steakCreditsBox}>
                     <label style={styles.steakCreditsBoxRow}>
                       <input

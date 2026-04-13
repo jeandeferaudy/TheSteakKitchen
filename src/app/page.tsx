@@ -5850,6 +5850,10 @@ React.useEffect(() => {
         isAdmin={isAdmin}
         isLoggedIn={!!authUserId}
         steakCreditsEnabled={steakCreditsEnabled}
+        offerSteakCreditsToGuests={loyaltyProgramsDraft.offer_steak_credits_to_guests}
+        autoActivateSteakCreditsForNewAccounts={
+          loyaltyProgramsDraft.auto_activate_steak_credits_for_new_accounts
+        }
         availableSteakCredits={availableSteakCredits}
         createAccountFromDetails={createAccountFromDetails}
         setCreateAccountFromDetails={(next) => {
