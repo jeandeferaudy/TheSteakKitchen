@@ -51,6 +51,7 @@ import {
   addOrderLinesByAdmin,
   createOrderByAdmin,
   deleteOrderByAdmin,
+  deleteOrderLineByAdmin,
   fetchOrderDetail,
   fetchOrders,
   hydrateOrderLineFinancialSnapshots,
@@ -91,6 +92,7 @@ import {
 import {
   adjustCustomerSteakCredits,
   deleteCustomerById,
+  createCustomerRecord,
   ensureCustomerForAccountSignup,
   fetchAdminProfilesForCustomerLink,
   fetchAdminCustomerDetail,
@@ -2625,6 +2627,14 @@ React.useEffect(() => {
     [loadAndSelectOrder]
   );
 
+  const handleOrderDeleteLine = React.useCallback(
+    async (orderId: string, orderLineId: string) => {
+      await deleteOrderLineByAdmin(orderId, orderLineId);
+      await loadAndSelectOrder(orderId);
+    },
+    [loadAndSelectOrder]
+  );
+
   const handleOrderAmountPaidChange = React.useCallback(
     async (orderId: string, amountPaid: number | null) => {
       await updateOrderAmountPaid(orderId, amountPaid);
@@ -2661,6 +2671,8 @@ React.useEffect(() => {
           row.id === orderId
             ? {
                 ...row,
+                customer_id:
+                  patch.customer_id === undefined ? row.customer_id : patch.customer_id,
                 full_name: patch.full_name ?? row.full_name,
                 email: patch.email ?? row.email,
                 phone: patch.phone ?? row.phone,
@@ -2674,6 +2686,8 @@ React.useEffect(() => {
           row.id === orderId
             ? {
                 ...row,
+                customer_id:
+                  patch.customer_id === undefined ? row.customer_id : patch.customer_id,
                 full_name: patch.full_name ?? row.full_name,
                 email: patch.email ?? row.email,
                 phone: patch.phone ?? row.phone,
@@ -2687,6 +2701,7 @@ React.useEffect(() => {
           ? {
               ...prev,
               created_at: patch.created_at ?? prev.created_at,
+              customer_id: patch.customer_id === undefined ? prev.customer_id : patch.customer_id,
               full_name: patch.full_name ?? prev.full_name,
               email: patch.email ?? prev.email,
               phone: patch.phone ?? prev.phone,
@@ -2707,6 +2722,36 @@ React.useEffect(() => {
       );
     },
     []
+  );
+
+  const handleOrderCreateAndLinkCustomer = React.useCallback(
+    async (orderId: string) => {
+      const order = selectedOrderDetail && selectedOrderDetail.id === orderId ? selectedOrderDetail : null;
+      if (!order) {
+        throw new Error("Order not found.");
+      }
+
+      const fullName = String(order.full_name ?? "").trim();
+      const phone = String(order.phone ?? "").trim();
+      if (!fullName) throw new Error("Order full name is required to create a customer.");
+      if (!phone) throw new Error("Order phone is required to create a customer.");
+
+      const createdCustomer = await createCustomerRecord({
+        fullName,
+        phone,
+        email: String(order.email ?? "").trim() || null,
+        address: String(order.address ?? "").trim(),
+        notes: String(order.notes ?? "").trim() || null,
+        postalCode: String(order.postal_code ?? "").trim() || null,
+        country: "Philippines",
+        deliveryNote: String(order.notes ?? "").trim() || null,
+      });
+
+      await updateOrderAdminFields(orderId, { customer_id: createdCustomer.id });
+      await loadAndSelectOrder(orderId);
+      setOrderNotice(`Linked to new customer ${createdCustomer.full_name}.`);
+    },
+    [loadAndSelectOrder, selectedOrderDetail]
   );
 
   const handleOrderDelete = React.useCallback(
@@ -6130,10 +6175,12 @@ React.useEffect(() => {
         onChangeStatuses={handleOrderStatusChange}
         onChangePackedQty={handleOrderPackedQtyChange}
         onChangeUnitPrice={handleOrderUnitPriceChange}
+        onDeleteLine={handleOrderDeleteLine}
         onAddLines={handleOrderAddLines}
         onChangeAmountPaid={handleOrderAmountPaidChange}
         onChangePaymentProof={handleOrderPaymentProofChange}
         onChangeAdminFields={handleOrderAdminFieldsChange}
+        onCreateCustomerAndLink={handleOrderCreateAndLinkCustomer}
         onDeleteOrder={handleOrderDelete}
         noticeText={orderNotice}
         backgroundStyle={mainZoneStyle}

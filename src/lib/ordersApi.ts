@@ -58,6 +58,7 @@ export type OrderDetail = {
   created_at: string;
   order_number: string | null;
   access_scope: "public" | "private";
+  customer_id: string | null;
   total_qty: number;
   full_name: string | null;
   email: string | null;
@@ -93,6 +94,7 @@ export type OrderStatusPatch = {
 
 export type OrderAdminPatch = {
   created_at?: string | null;
+  customer_id?: string | null;
   full_name?: string | null;
   email?: string | null;
   phone?: string | null;
@@ -534,6 +536,7 @@ export async function fetchOrderDetail(orderId: string): Promise<OrderDetail | n
     created_at: String(order.created_at ?? ""),
     order_number: (order as any).order_number ?? null,
     access_scope: (order as any).access_scope === "public" ? "public" : "private",
+    customer_id: (order as any).customer_id ?? null,
     total_qty: Number((order as any).total_qty ?? 0),
     full_name: (order as any).full_name ?? null,
     email: (order as any).email ?? null,
@@ -664,6 +667,28 @@ export async function updateOrderLinePackedQty(orderLineId: string, packedQty: n
   if (!data || data.length === 0) {
     throw new Error("Packed quantity update was blocked (no rows updated). Check RLS/update policy on order_lines.");
   }
+}
+
+export async function deleteOrderLineByAdmin(orderId: string, orderLineId: string) {
+  const asError = (e: unknown) =>
+    e instanceof Error ? e : new Error(typeof e === "string" ? e : JSON.stringify(e));
+
+  const { data: lineRow, error: lineFetchError } = await supabase
+    .from("order_lines")
+    .select("id,order_id,added_by_admin")
+    .eq("id", orderLineId)
+    .eq("order_id", orderId)
+    .maybeSingle();
+  if (lineFetchError) throw asError(lineFetchError.message ?? lineFetchError);
+  if (!lineRow) throw new Error("Order line not found.");
+  if (!Boolean((lineRow as any).added_by_admin)) {
+    throw new Error("Only order lines added by admin can be deleted here.");
+  }
+
+  const { error: deleteError } = await supabase.from("order_lines").delete().eq("id", orderLineId);
+  if (deleteError) throw asError(deleteError.message ?? deleteError);
+
+  await rebuildOrderTotals(orderId);
 }
 
 export async function addOrderLinesByAdmin(

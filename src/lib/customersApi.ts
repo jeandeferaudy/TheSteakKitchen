@@ -485,6 +485,41 @@ export async function ensureCustomerRecord(input: CustomerIdentityInput): Promis
   return mapCustomerRecord(data as Record<string, unknown>);
 }
 
+export async function createCustomerRecord(input: CustomerIdentityInput): Promise<CustomerRecord> {
+  const fullName = composeCustomerFullName(input);
+  const phone = normalizeText(input.phone);
+  if (!fullName) throw new Error("Customer full name is required.");
+  if (!phone) throw new Error("Customer phone is required.");
+  const rawAddress = normalizeText(input.address);
+
+  const { data, error } = await selectCustomerRows<Record<string, unknown>>((columns) =>
+    supabase
+      .from("customers")
+      .insert({
+        first_name: normalizeText(input.firstName) || null,
+        last_name: normalizeText(input.lastName) || null,
+        full_name: fullName,
+        phone,
+        email: normalizeText(input.email) || null,
+        address: rawAddress || composeCustomerAddress(input),
+        attention_to: normalizeText(input.attentionTo) || null,
+        address_line1: normalizeText(input.addressLine1) || null,
+        address_line2: normalizeText(input.addressLine2) || null,
+        barangay: normalizeText(input.barangay) || null,
+        city: normalizeText(input.city) || null,
+        province: normalizeText(input.province) || null,
+        postal_code: normalizeText(input.postalCode) || null,
+        country: normalizeText(input.country) || "Philippines",
+        delivery_note: normalizeText(input.deliveryNote) || null,
+        notes: normalizeText(input.notes) || null,
+      })
+      .select(columns)
+      .single()
+  );
+  if (error) throw error;
+  return mapCustomerRecord(data as Record<string, unknown>);
+}
+
 export async function linkProfileToCustomer(profileId: string, customerId: string): Promise<void> {
   const { error } = await supabase.rpc("tp_admin_link_customer_to_profile", {
     p_profile_id: profileId,

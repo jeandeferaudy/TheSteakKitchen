@@ -24,6 +24,7 @@ type Props = {
     orderLineId: string,
     unitPrice: number | null
   ) => Promise<void> | void;
+  onDeleteLine?: (orderId: string, orderLineId: string) => Promise<void> | void;
   onChangeAmountPaid?: (orderId: string, amountPaid: number | null) => Promise<void> | void;
   onChangePaymentProof?: (
     orderId: string,
@@ -31,6 +32,7 @@ type Props = {
     currentPath: string | null
   ) => Promise<void> | void;
   onChangeAdminFields?: (orderId: string, patch: OrderAdminPatch) => Promise<void> | void;
+  onCreateCustomerAndLink?: (orderId: string) => Promise<void> | void;
   onDeleteOrder?: (orderId: string, paymentProofPath: string | null) => Promise<void> | void;
   onAddLines?: (
     orderId: string,
@@ -141,9 +143,11 @@ export default function OrderDrawer({
   onChangeStatuses,
   onChangePackedQty,
   onChangeUnitPrice,
+  onDeleteLine,
   onChangeAmountPaid,
   onChangePaymentProof,
   onChangeAdminFields,
+  onCreateCustomerAndLink,
   onDeleteOrder,
   onAddLines,
 }: Props) {
@@ -164,6 +168,8 @@ export default function OrderDrawer({
   const [savingProof, setSavingProof] = React.useState(false);
   const [paymentOpen, setPaymentOpen] = React.useState(false);
   const [copyNoticeVisible, setCopyNoticeVisible] = React.useState(false);
+  const [creatingCustomerLink, setCreatingCustomerLink] = React.useState(false);
+  const [deletingLineIds, setDeletingLineIds] = React.useState<Record<string, boolean>>({});
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [deletingOrder, setDeletingOrder] = React.useState(false);
   const [addLinesOpen, setAddLinesOpen] = React.useState(false);
@@ -209,6 +215,34 @@ export default function OrderDrawer({
       delete savedPulseTimersRef.current[key];
     }, 900);
   }, []);
+
+  const handleCreateCustomerAndLink = React.useCallback(async () => {
+    if (!detail || !onCreateCustomerAndLink) return;
+    setCreatingCustomerLink(true);
+    try {
+      await onCreateCustomerAndLink(detail.id);
+      pulseSaved("customer_id");
+    } finally {
+      setCreatingCustomerLink(false);
+    }
+  }, [detail, onCreateCustomerAndLink, pulseSaved]);
+
+  const handleDeleteLine = React.useCallback(
+    async (lineId: string) => {
+      if (!detail || !onDeleteLine) return;
+      setDeletingLineIds((prev) => ({ ...prev, [lineId]: true }));
+      try {
+        await onDeleteLine(detail.id, lineId);
+      } finally {
+        setDeletingLineIds((prev) => {
+          const next = { ...prev };
+          delete next[lineId];
+          return next;
+        });
+      }
+    },
+    [detail, onDeleteLine]
+  );
 
   React.useEffect(
     () => () => {
@@ -829,7 +863,21 @@ export default function OrderDrawer({
                             {[it.size, it.temperature].filter(Boolean).join(" • ") || "—"}
                           </div>
                           {it.added_by_admin ? (
-                            <div style={styles.adminAddedText}>added by admin</div>
+                            <div style={styles.adminLineMetaRow}>
+                              <div style={styles.adminAddedText}>added by admin</div>
+                              {canEdit && onDeleteLine ? (
+                                <button
+                                  type="button"
+                                  style={styles.lineDeleteBtn}
+                                  onClick={() => void handleDeleteLine(it.id)}
+                                  disabled={Boolean(deletingLineIds[it.id])}
+                                  aria-label="Delete admin-added line"
+                                  title="Delete admin-added line"
+                                >
+                                  <RemoveIcon size={12} />
+                                </button>
+                              ) : null}
+                            </div>
                           ) : null}
                           {canEdit ? (
                             <div style={styles.metaInputRow}>
@@ -945,7 +993,21 @@ export default function OrderDrawer({
                               {[it.size, it.temperature].filter(Boolean).join(" • ") || "—"}
                             </div>
                             {it.added_by_admin ? (
-                              <div style={styles.adminAddedText}>added by admin</div>
+                              <div style={styles.adminLineMetaRow}>
+                                <div style={styles.adminAddedText}>added by admin</div>
+                                {canEdit && onDeleteLine ? (
+                                  <button
+                                    type="button"
+                                    style={styles.lineDeleteBtn}
+                                    onClick={() => void handleDeleteLine(it.id)}
+                                    disabled={Boolean(deletingLineIds[it.id])}
+                                    aria-label="Delete admin-added line"
+                                    title="Delete admin-added line"
+                                  >
+                                    <RemoveIcon size={12} />
+                                  </button>
+                                ) : null}
+                              </div>
                             ) : null}
                             {canEdit ? (
                               <div style={styles.metaInputRow}>
@@ -1141,7 +1203,21 @@ export default function OrderDrawer({
                 </div>
 
                 <div style={styles.sectionCard}>
-                  <div style={styles.sectionTitle}>CUSTOMER</div>
+                  <div style={styles.sectionHeaderRow}>
+                    <div style={styles.sectionTitle}>CUSTOMER</div>
+                    {canEdit && onCreateCustomerAndLink ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleCreateCustomerAndLink()}
+                        disabled={creatingCustomerLink}
+                        aria-label="Create and link customer from order"
+                        title="Create and link customer"
+                        style={styles.customerLinkAddBtn}
+                      >
+                        +
+                      </button>
+                    ) : null}
+                  </div>
                   <div style={styles.kvRow}>
                     <span>Name</span>
                     {canEdit ? (
@@ -1165,7 +1241,14 @@ export default function OrderDrawer({
                         <input
                           value={adminDraft.email}
                           onChange={(e) => setAdminDraft((prev) => ({ ...prev, email: e.target.value }))}
-                          onBlur={() => void saveAdminFields({ email: adminDraft.email.trim() || null }, "email")}
+                          onBlur={() =>
+                            void saveAdminFields(
+                              adminDraft.email.trim()
+                                ? { email: adminDraft.email.trim() }
+                                : { email: null, customer_id: null },
+                              "email"
+                            )
+                          }
                           style={{ ...styles.kvInput, ...styles.inputWithCheckPadding }}
                         />
                         {savedPulseByKey.email ? <span style={styles.savedCheck}>✓</span> : null}
@@ -1756,8 +1839,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   content: {
     flex: 1,
-    overflow: "hidden",
-    padding: `6px 0 48px ${BACK_BTN_W + TITLE_GAP}px`,
+    overflowX: "hidden",
+    overflowY: "hidden",
+    paddingTop: 6,
+    paddingRight: 0,
+    paddingBottom: 48,
+    paddingLeft: BACK_BTN_W + TITLE_GAP,
     color: "var(--tp-text-color)",
   },
   hint: { marginTop: 12, fontSize: 15, opacity: 0.75 },
@@ -1923,6 +2010,13 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 12,
     background: "var(--tp-control-bg-soft)",
   },
+  sectionHeaderRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 10,
+  },
   customerActionCard: {
     marginTop: 16,
     border: "1px solid rgba(255,166,77,0.75)",
@@ -1981,7 +2075,48 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.4,
     color: "#ffb7b7",
   },
-  sectionTitle: { fontSize: 15, letterSpacing: 1.2, fontWeight: 900, marginBottom: 10 },
+  sectionTitle: { fontSize: 15, letterSpacing: 1.2, fontWeight: 900 },
+  customerLinkAddBtn: {
+    width: 26,
+    height: 26,
+    minWidth: 26,
+    minHeight: 26,
+    borderRadius: 999,
+    border: "1px solid rgba(255, 191, 115, 0.6)",
+    background: "transparent",
+    color: "#ffbf73",
+    fontSize: 18,
+    fontWeight: 900,
+    lineHeight: 1,
+    padding: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+  },
+  adminLineMetaRow: {
+    marginTop: 2,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  lineDeleteBtn: {
+    width: 26,
+    height: 26,
+    minWidth: 26,
+    minHeight: 26,
+    borderRadius: 999,
+    border: "1px solid rgba(214,74,74,0.48)",
+    background: "rgba(214,74,74,0.12)",
+    color: "#ff8787",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    cursor: "pointer",
+    flex: "0 0 auto",
+  },
   itemHeadRow: {
     display: "grid",
     gridTemplateColumns: "1fr 84px 108px 90px",
