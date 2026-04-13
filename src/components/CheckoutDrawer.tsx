@@ -1408,6 +1408,33 @@ export default function CheckoutDrawer({
                     </div>
                   ) : null}
 
+                  {referralDiscountAmount > 0 ? (
+                    <div
+                      style={{
+                        ...styles.summaryTotalRow,
+                        ...styles.summaryTotalRowNoLine,
+                        ...styles.summaryIndentedRow,
+                      }}
+                    >
+                      <div style={styles.summaryMinorLabel}>Referral Discount</div>
+                      <div style={{ ...styles.summaryMinorValue, color: "var(--tp-accent)" }}>
+                        - ₱ {formatMoney(referralDiscountAmount)}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div style={styles.summaryShortDivider} />
+                  <div
+                    style={{
+                      ...styles.summaryTotalRowFinal,
+                      ...styles.summaryIndentedRow,
+                    }}
+                  >
+                    <div style={styles.summaryTotalLabel}>TOTAL</div>
+                    <div style={styles.summaryTotalValue}>
+                      ₱ {formatMoney(displayedTotal)}
+                    </div>
+                  </div>
                   {canUseReferralCode ? (
                     <div style={{ ...styles.referralBox, ...styles.summaryIndentedBlock }}>
                       <div style={styles.referralInputRow}>
@@ -1445,34 +1472,6 @@ export default function CheckoutDrawer({
                       {referralError ? <div style={styles.referralError}>{referralError}</div> : null}
                     </div>
                   ) : null}
-
-                  {referralDiscountAmount > 0 ? (
-                    <div
-                      style={{
-                        ...styles.summaryTotalRow,
-                        ...styles.summaryTotalRowNoLine,
-                        ...styles.summaryIndentedRow,
-                      }}
-                    >
-                      <div style={styles.summaryMinorLabel}>Referral Discount</div>
-                      <div style={{ ...styles.summaryMinorValue, color: "var(--tp-accent)" }}>
-                        - ₱ {formatMoney(referralDiscountAmount)}
-                      </div>
-                    </div>
-                  ) : null}
-
-                    <div style={styles.summaryShortDivider} />
-                  <div
-                    style={{
-                      ...styles.summaryTotalRowFinal,
-                      ...styles.summaryIndentedRow,
-                    }}
-                  >
-                    <div style={styles.summaryTotalLabel}>TOTAL</div>
-                    <div style={styles.summaryTotalValue}>
-                      ₱ {formatMoney(displayedTotal)}
-                    </div>
-                  </div>
                   {isLoggedIn && steakCreditsEnabled ? (
                     <div style={{ ...styles.steakCreditsSummary, ...styles.summaryIndentedBlock }}>
                       This order earns you {formatCurrencyPHP(steakCreditsEstimate)} in Steak Credits.
