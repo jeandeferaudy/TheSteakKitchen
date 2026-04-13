@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     const from = process.env.RESEND_FROM || "onboarding@resend.dev";
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
-      return NextResponse.json({ ok: false, error: "Missing RESEND_API_KEY." }, { status: 500 });
+      return NextResponse.json({ ok: true, skipped: true, reason: "Missing RESEND_API_KEY." });
     }
 
     const origin =
