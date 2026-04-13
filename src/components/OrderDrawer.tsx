@@ -434,11 +434,6 @@ export default function OrderDrawer({
     return decodeURIComponent(last) || "attachment";
   }, [detail?.payment_proof_path, detail?.payment_proof_url]);
 
-  const paymentDue = React.useMemo(() => {
-    if (!detail) return 0;
-    return Math.max(0, Number(detail.total_selling_price ?? 0) - Number(detail.amount_paid ?? 0));
-  }, [detail]);
-
   const showMakePayment = !canEdit && !!detail && String(detail.paid_status || "").toLowerCase() !== "paid";
 
   const gcashPhoneRaw = gcashPhone.trim();
@@ -475,10 +470,32 @@ export default function OrderDrawer({
     return Number.isNaN(v) ? 0 : v;
   }, [amountPaidDraft]);
 
-  const paymentDelta = React.useMemo(() => {
+  const computedDisplayTotal = React.useMemo(() => {
     if (!detail) return 0;
-    return amountPaid - detail.total_selling_price;
-  }, [amountPaid, detail]);
+    const rawFee = Number(adminDraft.delivery_fee);
+    const deliveryFee = Number.isNaN(rawFee) ? Number(detail.delivery_fee ?? 0) : Math.max(0, rawFee);
+    return Math.max(
+      0,
+      Number(detail.subtotal ?? 0) +
+        deliveryFee +
+        Number(detail.thermal_bag_fee ?? 0) -
+        Number(detail.steak_credits_applied ?? 0)
+    );
+  }, [adminDraft.delivery_fee, detail]);
+
+  const effectiveDisplayTotal = React.useMemo(() => {
+    if (!detail) return 0;
+    return canEdit ? computedDisplayTotal : Number(detail.total_selling_price ?? 0);
+  }, [canEdit, computedDisplayTotal, detail]);
+
+  const paymentDue = React.useMemo(() => {
+    if (!detail) return 0;
+    return Math.max(0, effectiveDisplayTotal - Number(detail.amount_paid ?? 0));
+  }, [detail, effectiveDisplayTotal]);
+
+  const paymentDelta = React.useMemo(() => {
+    return amountPaid - effectiveDisplayTotal;
+  }, [amountPaid, effectiveDisplayTotal]);
 
   const paymentDeltaMessage = React.useMemo(() => {
     if (paymentDelta === 0) {
@@ -498,13 +515,6 @@ export default function OrderDrawer({
       tone: styles.paymentDeltaRow,
     };
   }, [paymentDelta]);
-
-  const computedDisplayTotal = React.useMemo(() => {
-    if (!detail) return 0;
-    const rawFee = Number(adminDraft.delivery_fee);
-    const deliveryFee = Number.isNaN(rawFee) ? Number(detail.delivery_fee ?? 0) : Math.max(0, rawFee);
-    return Number(detail.subtotal ?? 0) + deliveryFee + Number(detail.thermal_bag_fee ?? 0);
-  }, [adminDraft.delivery_fee, detail]);
 
   const totalUnits = React.useMemo(
     () => (detail ? detail.items.reduce((sum, it) => sum + Number(it.qty ?? 0), 0) : 0),
@@ -970,6 +980,14 @@ export default function OrderDrawer({
                           {detail.thermal_bag_fee > 0 ? `₱ ${fmtMoney(detail.thermal_bag_fee)}` : "FREE"}
                         </strong>
                       </div>
+                      {detail.steak_credits_applied > 0 ? (
+                        <div style={styles.totalRowMobile}>
+                          <span>Steak credits used</span>
+                          <strong style={styles.adminHighlight}>
+                            -₱ {fmtMoney(detail.steak_credits_applied)}
+                          </strong>
+                        </div>
+                      ) : null}
                       <div style={{ ...styles.totalRowMobile, ...styles.totalStrongMobile }}>
                         <span>Total</span>
                         <strong>₱ {fmtMoney(canEdit ? computedDisplayTotal : detail.total_selling_price)}</strong>
@@ -1111,6 +1129,22 @@ export default function OrderDrawer({
                           {detail.thermal_bag_fee > 0 ? `₱ ${fmtMoney(detail.thermal_bag_fee)}` : "FREE"}
                         </strong>
                       </div>
+                      {detail.steak_credits_applied > 0 ? (
+                        <div
+                          style={{ ...styles.totalGridRow, gridTemplateColumns: itemGridTemplate }}
+                        >
+                          <span>Steak credits used</span>
+                          <strong
+                            style={{
+                              ...styles.totalValueCell,
+                              ...styles.adminHighlight,
+                              gridColumn: 4,
+                            }}
+                          >
+                            -₱ {fmtMoney(detail.steak_credits_applied)}
+                          </strong>
+                        </div>
+                      ) : null}
                       <div style={{ ...styles.totalGridRow, ...styles.totalStrong, gridTemplateColumns: itemGridTemplate }}>
                         <span>Total</span>
                         <strong
@@ -1475,7 +1509,8 @@ export default function OrderDrawer({
                               total_selling_price:
                                 Number(detail.subtotal ?? 0) +
                                 nextFee +
-                                Number(detail.thermal_bag_fee ?? 0),
+                                Number(detail.thermal_bag_fee ?? 0) -
+                                Number(detail.steak_credits_applied ?? 0),
                             }, "delivery_fee");
                           }}
                           style={{ ...styles.amountPaidInput, ...styles.inputWithCheckPadding }}
@@ -1489,7 +1524,7 @@ export default function OrderDrawer({
                   <div style={styles.kvRow}>
                     <span>Total</span>
                     <div style={styles.totalPayCell}>
-                      <strong>₱ {fmtMoney(canEdit ? computedDisplayTotal : detail.total_selling_price)}</strong>
+                      <strong>₱ {fmtMoney(effectiveDisplayTotal)}</strong>
                       {showMakePayment ? (
                         <button
                           type="button"

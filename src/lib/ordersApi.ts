@@ -17,6 +17,7 @@ export type OrderListItem = {
   subtotal: number;
   delivery_fee: number;
   thermal_bag_fee: number;
+  steak_credits_applied: number;
   total_selling_price: number;
   total_cost?: number;
   total_profit?: number;
@@ -74,6 +75,7 @@ export type OrderDetail = {
   subtotal: number;
   delivery_fee: number;
   thermal_bag_fee: number;
+  steak_credits_applied: number;
   total_selling_price: number;
   total_cost?: number;
   total_profit?: number;
@@ -318,7 +320,7 @@ export async function fetchOrders(params: {
   let query = supabase
     .from("orders")
     .select(
-      "id,customer_id,order_number,access_scope,created_at,delivery_date,total_qty,subtotal,delivery_fee,thermal_bag_fee,total_selling_price,amount_paid,status,paid_status,delivery_status,full_name,email,phone,placed_for_someone_else"
+      "id,customer_id,order_number,access_scope,created_at,delivery_date,total_qty,subtotal,delivery_fee,thermal_bag_fee,steak_credits_applied,total_selling_price,amount_paid,status,paid_status,delivery_status,full_name,email,phone,placed_for_someone_else"
     )
     .order("created_at", { ascending: false })
     .limit(200);
@@ -351,11 +353,12 @@ export async function fetchOrders(params: {
     subtotal: Number(r.subtotal ?? 0),
     delivery_fee: Number(r.delivery_fee ?? 0),
     thermal_bag_fee: Number(r.thermal_bag_fee ?? 0),
-      total_selling_price: Number(r.total_selling_price ?? 0),
-      total_cost:
-        r.total_cost === null || r.total_cost === undefined ? undefined : Number(r.total_cost),
-      total_profit:
-        r.total_profit === null || r.total_profit === undefined ? undefined : Number(r.total_profit),
+    steak_credits_applied: Number(r.steak_credits_applied ?? 0),
+    total_selling_price: Number(r.total_selling_price ?? 0),
+    total_cost:
+      r.total_cost === null || r.total_cost === undefined ? undefined : Number(r.total_cost),
+    total_profit:
+      r.total_profit === null || r.total_profit === undefined ? undefined : Number(r.total_profit),
     amount_paid:
       r.amount_paid === null || r.amount_paid === undefined ? null : Number(r.amount_paid),
     status: normalizeOrderStatus(r.status) as OrderListItem["status"],
@@ -552,6 +555,7 @@ export async function fetchOrderDetail(orderId: string): Promise<OrderDetail | n
     subtotal: Number((order as any).subtotal ?? 0),
     delivery_fee: Number((order as any).delivery_fee ?? 0),
     thermal_bag_fee: Number((order as any).thermal_bag_fee ?? 0),
+    steak_credits_applied: Number((order as any).steak_credits_applied ?? 0),
     total_selling_price: Number((order as any).total_selling_price ?? 0),
     total_cost:
       (order as any).total_cost === null || (order as any).total_cost === undefined

@@ -61,9 +61,14 @@ function statusTone(value: string): React.CSSProperties {
   return { color: "var(--tp-text-color)", borderColor: "rgba(255,255,255,0.24)", background: "transparent" };
 }
 
-function paymentAmountTone(amountPaid: number | null | undefined, total: number): React.CSSProperties {
+function paymentAmountTone(
+  amountPaid: number | null | undefined,
+  total: number,
+  steakCreditsApplied: number | null | undefined = 0
+): React.CSSProperties {
   const paid = Number(amountPaid ?? 0);
-  const due = paid - Number(total || 0);
+  const finalTotal = Math.max(0, Number(total || 0) - Number(steakCreditsApplied || 0));
+  const due = paid - finalTotal;
   if (due === 0) return { color: "#67bf8a" };
   if (due < 0) return { color: "#de6464" };
   return { color: "#66c7ff" };
@@ -211,7 +216,11 @@ export default function MyOrdersDrawer({
                     <div
                       style={{
                         ...styles.mobileTotal,
-                        ...paymentAmountTone(o.amount_paid, o.total_selling_price),
+                        ...paymentAmountTone(
+                          o.amount_paid,
+                          o.total_selling_price,
+                          o.steak_credits_applied
+                        ),
                       }}
                     >
                       ₱ {fmtMoney(o.total_selling_price)}
@@ -289,7 +298,13 @@ export default function MyOrdersDrawer({
                     )}
                   </div>
                   <div>{fmtPickedOrdered(o.packed_qty_total, o.total_qty)}</div>
-                  <div style={paymentAmountTone(o.amount_paid, o.total_selling_price)}>
+                  <div
+                    style={paymentAmountTone(
+                      o.amount_paid,
+                      o.total_selling_price,
+                      o.steak_credits_applied
+                    )}
+                  >
                     ₱ {fmtMoney(o.total_selling_price)}
                   </div>
                   <div style={styles.centerCell}><span style={{ ...styles.rowStatusPill, ...statusTone(o.status) }}>{o.status}</span></div>
