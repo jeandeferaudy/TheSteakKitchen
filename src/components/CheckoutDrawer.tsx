@@ -7,10 +7,12 @@ import type { CheckoutSubmitPayload, CustomerDraft } from "@/types/checkout";
 import { AppButton, RemoveIcon, TOPBAR_FONT_SIZE, UI } from "@/components/ui";
 import LogoPlaceholder from "@/components/LogoPlaceholder";
 import {
-  fallbackDeliveryRule,
-  getDeliveryPricingMatrixRows,
-  type DeliveryRule,
-} from "@/lib/deliveryPricing";
+  buildLogisticsPricingRows,
+  fetchLogisticsConfig,
+  normalizePostalCode,
+  resolveLogisticsPrice,
+  type LogisticsConfig,
+} from "@/lib/logisticsApi";
 import {
   findReferralReuseConflict,
   findCustomerByReferralCode,
@@ -192,7 +194,12 @@ export default function CheckoutDrawer({
   const [lastOrderUpdateDraft, setLastOrderUpdateDraft] = React.useState<LastOrderUpdateDraft | null>(null);
   const [lastOrderUpdateOpen, setLastOrderUpdateOpen] = React.useState(false);
   const [lastOrderUpdateSaving, setLastOrderUpdateSaving] = React.useState(false);
-  const [deliveryRules, setDeliveryRules] = React.useState<DeliveryRule[]>([]);
+  const [logisticsConfig, setLogisticsConfig] = React.useState<LogisticsConfig>({
+    rules: [],
+    other_enabled: false,
+    other_price_php: 0,
+    other_free_delivery_moq_php: 0,
+  });
   const [deliveryPricingOpen, setDeliveryPricingOpen] = React.useState(false);
   const [proofPreviewOpen, setProofPreviewOpen] = React.useState(false);
   const [proofPreviewUrl, setProofPreviewUrl] = React.useState<string | null>(null);
@@ -215,7 +222,10 @@ export default function CheckoutDrawer({
   const timePickerListRef = React.useRef<HTMLDivElement | null>(null);
   const notesTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const rightStepScrollRef = React.useRef<HTMLDivElement | null>(null);
-  const deliveryPricingRows = React.useMemo(() => getDeliveryPricingMatrixRows(), []);
+  const deliveryPricingRows = React.useMemo(
+    () => buildLogisticsPricingRows(logisticsConfig),
+    [logisticsConfig]
+  );
   const adminCustomerOptionLabels = React.useMemo(
     () =>
       adminCustomerOptions.map((option) => ({
@@ -339,25 +349,17 @@ export default function CheckoutDrawer({
 
   React.useEffect(() => {
     if (!isOpen) return;
-    const loadDeliveryRules = async () => {
-      const { data, error } = await supabase
-        .from("delivery_pricing")
-        .select(
-          "postal_code,area_name,min_order_free_delivery_php,delivery_fee_below_min_php"
-        );
-      if (error) {
-        console.error("[CheckoutDrawer] delivery_pricing load failed:", error.message);
-      }
-      const rows = ((data ?? []) as DeliveryRule[]).map((r) => ({
-        ...r,
-        postal_code: String(r.postal_code ?? "").trim(),
-        area_name: String(r.area_name ?? "").trim(),
-        min_order_free_delivery_php: Number(r.min_order_free_delivery_php ?? 0),
-        delivery_fee_below_min_php: Number(r.delivery_fee_below_min_php ?? 0),
-      }));
-      setDeliveryRules(rows);
-    };
-    void loadDeliveryRules();
+    fetchLogisticsConfig()
+      .then((config) => setLogisticsConfig(config))
+      .catch((error) => {
+        console.error("[CheckoutDrawer] logistics load failed:", error);
+        setLogisticsConfig({
+          rules: [],
+          other_enabled: false,
+          other_price_php: 0,
+          other_free_delivery_moq_php: 0,
+        });
+      });
   }, [isOpen]);
 
   React.useEffect(() => {
@@ -519,47 +521,14 @@ export default function CheckoutDrawer({
   const isWithin2h = selectedDeliveryMs > 0 && selectedDeliveryMs < minDeliveryMs;
   const fieldRowStyle = isNarrow ? styles.fieldRowMobile : styles.fieldRowDesktop;
   const fieldLabelStyle = isNarrow ? styles.label : styles.labelDesktop;
-  const normalizedPostal = customer.postal_code.replace(/\D/g, "");
-  const normalizedArea = `${customer.barangay} ${customer.city}`.trim().toLowerCase();
-  const hasDeliveryRules = deliveryRules.length > 0;
-
-  const selectedDeliveryRule = useMemo(() => {
-    if (!hasDeliveryRules) {
-      return fallbackDeliveryRule(normalizedPostal, normalizedArea);
-    }
-    if (!normalizedPostal) return null;
-    const matchesPostal = deliveryRules.filter((r) => {
-      const rulePostal = String(r.postal_code ?? "").replace(/\D/g, "");
-      return rulePostal === normalizedPostal;
-    });
-    if (!matchesPostal.length) return null;
-    if (matchesPostal.length === 1) return matchesPostal[0];
-
-    const exactAreaMatch = matchesPostal.find((r) =>
-      normalizedArea.includes(r.area_name.toLowerCase())
-    );
-    if (exactAreaMatch) return exactAreaMatch;
-
-    const partialAreaMatch = matchesPostal.find((r) =>
-      r.area_name
-        .toLowerCase()
-        .split(/[,\s/]+/)
-        .filter((p) => p.length > 3)
-        .some((p) => normalizedArea.includes(p))
-    );
-    if (partialAreaMatch) return partialAreaMatch;
-
-    return matchesPostal.sort(
-      (a, b) => a.min_order_free_delivery_php - b.min_order_free_delivery_php
-    )[0];
-  }, [deliveryRules, hasDeliveryRules, normalizedArea, normalizedPostal]);
-
-  const postalSupported = !normalizedPostal ? false : !!selectedDeliveryRule;
-  const freeDeliveryTarget = selectedDeliveryRule?.min_order_free_delivery_php ?? 0;
-  const deliveryFee =
-    !selectedDeliveryRule || computedTotal >= 4000 || computedTotal >= freeDeliveryTarget
-      ? 0
-      : selectedDeliveryRule.delivery_fee_below_min_php;
+  const normalizedPostal = normalizePostalCode(customer.postal_code);
+  const resolvedLogistics = useMemo(
+    () => resolveLogisticsPrice(normalizedPostal, logisticsConfig, computedTotal),
+    [computedTotal, logisticsConfig, normalizedPostal]
+  );
+  const postalSupported = !normalizedPostal ? false : resolvedLogistics.supported;
+  const deliveryFee = resolvedLogistics.pricePhp ?? 0;
+  const freeDeliveryMoq = resolvedLogistics.freeDeliveryMoqPhp ?? 0;
   const referBagFee = customer.add_refer_bag ? 200 : 0;
   const grandTotal = computedTotal + deliveryFee + referBagFee;
   const hasOutOfStockItems = summaryLines.some((li: any) => Boolean(li?.outOfStock));
@@ -1193,10 +1162,10 @@ export default function CheckoutDrawer({
   );
 
   const freeDeliveryHintNode =
-    postalSupported && deliveryFee > 0 ? (
+    postalSupported && freeDeliveryMoq > 0 && deliveryFee > 0 ? (
       <div style={{ ...styles.deliveryHint, ...styles.summaryIndentedBlock }}>
-        The minimum order for your postal code is ₱ {formatMoney(freeDeliveryTarget)}. Order ₱{" "}
-        {formatMoney(Math.max(freeDeliveryTarget - computedTotal, 0))} more to get FREE delivery.{" "}
+        For your postal code, minimum order amount is ₱ {formatMoney(freeDeliveryMoq)} to get free
+        delivery. Below, delivery fee is ₱ {formatMoney(deliveryFee)}.{" "}
         <button
           type="button"
           style={styles.deliveryCostsLink}
@@ -1204,6 +1173,11 @@ export default function CheckoutDrawer({
         >
           Click here to see our delivery costs.
         </button>
+      </div>
+    ) : postalSupported && freeDeliveryMoq > 0 && deliveryFee === 0 ? (
+      <div style={{ ...styles.deliveryHint, ...styles.summaryIndentedBlock }}>
+        This postal code qualifies for free delivery because your subtotal reached the MOQ of
+        ₱ {formatMoney(freeDeliveryMoq)}.
       </div>
     ) : null;
 
@@ -2568,32 +2542,29 @@ export default function CheckoutDrawer({
               </AppButton>
             </div>
             <div style={styles.deliveryPricingSubtitle}>
-              Free delivery unlocks automatically once your subtotal reaches the minimum for your area.
+              Search for your postal code to identify your minimum order amount to get free delivery
+              and delivery fee otherwise.
             </div>
 
             {isMobileViewport ? (
               <div style={styles.deliveryPricingCardList}>
                 {deliveryPricingRows.map((row) => (
-                  <div key={`${row.postalCodes}-${row.area}`} style={styles.deliveryPricingCard}>
+                  <div key={`${row.id}-${row.label}`} style={styles.deliveryPricingCard}>
                     <div style={styles.deliveryPricingCardRow}>
-                      <span style={styles.deliveryPricingCardLabel}>Area</span>
-                      <span style={styles.deliveryPricingCardValue}>{row.area}</span>
+                      <span style={styles.deliveryPricingCardLabel}>Postal code(s)</span>
+                      <span style={styles.deliveryPricingCardValue}>{row.label}</span>
                     </div>
                     <div style={styles.deliveryPricingCardRow}>
-                      <span style={styles.deliveryPricingCardLabel}>Free from</span>
+                      <span style={styles.deliveryPricingCardLabel}>Price</span>
+                      <span style={styles.deliveryPricingCardValue}>₱ {formatMoney(row.pricePhp)}</span>
+                    </div>
+                    <div style={styles.deliveryPricingCardRow}>
+                      <span style={styles.deliveryPricingCardLabel}>Minimum Order for free delivery</span>
                       <span style={styles.deliveryPricingCardValue}>
-                        ₱ {formatMoney(row.freeFromPhp)}
+                        {row.freeDeliveryMoqPhp > 0
+                          ? `₱ ${formatMoney(row.freeDeliveryMoqPhp)}`
+                          : "No MOQ"}
                       </span>
-                    </div>
-                    <div style={styles.deliveryPricingCardRow}>
-                      <span style={styles.deliveryPricingCardLabel}>Fee below min</span>
-                      <span style={styles.deliveryPricingCardValue}>
-                        ₱ {formatMoney(row.feeBelowMinPhp)}
-                      </span>
-                    </div>
-                    <div style={styles.deliveryPricingCardRow}>
-                      <span style={styles.deliveryPricingCardLabel}>Postcode(s)</span>
-                      <span style={styles.deliveryPricingCardValue}>{row.postalCodes}</span>
                     </div>
                   </div>
                 ))}
@@ -2601,17 +2572,19 @@ export default function CheckoutDrawer({
             ) : (
               <div style={styles.deliveryPricingTableWrap}>
                 <div style={styles.deliveryPricingTableHeaderRow}>
-                  <div style={styles.deliveryPricingAreaCol}>AREA</div>
-                  <div>FREE DELIVERY FROM</div>
-                  <div>FEE BELOW MIN</div>
-                  <div>POSTCODE(S)</div>
+                  <div style={styles.deliveryPricingAreaCol}>POSTAL CODE(S)</div>
+                  <div>PRICE</div>
+                  <div>MINIMUM ORDER FOR FREE DELIVERY</div>
                 </div>
                 {deliveryPricingRows.map((row) => (
-                  <div key={`${row.postalCodes}-${row.area}`} style={styles.deliveryPricingTableRow}>
-                    <div style={styles.deliveryPricingAreaCol}>{row.area}</div>
-                    <div>₱ {formatMoney(row.freeFromPhp)}</div>
-                    <div>₱ {formatMoney(row.feeBelowMinPhp)}</div>
-                    <div>{row.postalCodes}</div>
+                  <div key={`${row.id}-${row.label}`} style={styles.deliveryPricingTableRow}>
+                    <div style={styles.deliveryPricingAreaCol}>{row.label}</div>
+                    <div>₱ {formatMoney(row.pricePhp)}</div>
+                    <div>
+                      {row.freeDeliveryMoqPhp > 0
+                        ? `₱ ${formatMoney(row.freeDeliveryMoqPhp)}`
+                        : "No MOQ"}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3947,7 +3920,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   deliveryPricingTableHeaderRow: {
     display: "grid",
-    gridTemplateColumns: "2.1fr 1.4fr 1.4fr 1.7fr",
+    gridTemplateColumns: "2.2fr 1.1fr 1.4fr",
     gap: 0,
     alignItems: "center",
     padding: "18px 22px",
@@ -3958,7 +3931,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   deliveryPricingTableRow: {
     display: "grid",
-    gridTemplateColumns: "2.1fr 1.4fr 1.4fr 1.7fr",
+    gridTemplateColumns: "2.2fr 1.1fr 1.4fr",
     gap: 0,
     alignItems: "start",
     padding: "18px 22px",

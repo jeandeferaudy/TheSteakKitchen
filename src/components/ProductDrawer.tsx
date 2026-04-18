@@ -4,7 +4,11 @@
 import * as React from "react";
 import type { Product } from "@/types/product";
 import type { ProductImage } from "@/lib/products";
-import { getDeliveryPricingMatrixRows } from "@/lib/deliveryPricing";
+import {
+  buildLogisticsPricingRows,
+  fetchLogisticsConfig,
+  type LogisticsConfig,
+} from "@/lib/logisticsApi";
 import ReviewStars from "@/components/ReviewStars";
 import { AppButton, GearIcon, QtyIcon, TOPBAR_FONT_SIZE } from "@/components/ui";
 import LogoPlaceholder from "@/components/LogoPlaceholder";
@@ -112,7 +116,16 @@ export default function ProductDrawer({
     return sortOne?.url ?? orderedImages[0]?.url ?? "";
   }, [orderedImages]);
   const [activeImageUrl, setActiveImageUrl] = React.useState<string>("");
-  const deliveryPricingRows = React.useMemo(() => getDeliveryPricingMatrixRows(), []);
+  const [logisticsConfig, setLogisticsConfig] = React.useState<LogisticsConfig>({
+    rules: [],
+    other_enabled: false,
+    other_price_php: 0,
+    other_free_delivery_moq_php: 0,
+  });
+  const deliveryPricingRows = React.useMemo(
+    () => buildLogisticsPricingRows(logisticsConfig),
+    [logisticsConfig]
+  );
   const [approvedReviews, setApprovedReviews] = React.useState<ProductReview[]>([]);
   const [reviewsLoading, setReviewsLoading] = React.useState(false);
   const [reviewSort, setReviewSort] = React.useState<"recent" | "highest" | "lowest">("recent");
@@ -144,6 +157,17 @@ export default function ProductDrawer({
 
   React.useEffect(() => {
     if (!deliveryPricingOpen) return;
+    fetchLogisticsConfig()
+      .then((config) => setLogisticsConfig(config))
+      .catch((error) => {
+        console.error("Failed to load logistics rules", error);
+        setLogisticsConfig({
+          rules: [],
+          other_enabled: false,
+          other_price_php: 0,
+          other_free_delivery_moq_php: 0,
+        });
+      });
     const onEsc = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") setDeliveryPricingOpen(false);
     };
@@ -627,13 +651,13 @@ export default function ProductDrawer({
             </div>
           </div>
           <div style={styles.shopWhyCard}>
-            <div style={styles.shopWhyBadge}>FREE SHIPPING</div>
+            <div style={styles.shopWhyBadge}>DELIVERY FEES</div>
             <button
               type="button"
               style={styles.shopWhyLinkBtn}
               onClick={() => setDeliveryPricingOpen(true)}
             >
-              See minimum spending per area to unlock FREE delivery every time.
+              See delivery prices by postal code before you order.
             </button>
           </div>
         </div>
@@ -917,28 +941,29 @@ export default function ProductDrawer({
               </AppButton>
             </div>
             <div style={styles.deliveryPricingSubtitle}>
-              Free delivery unlocks automatically once your subtotal reaches the minimum for your area.
+              Search for your postal code to identify your minimum order amount to get free delivery
+              and delivery fee otherwise.
             </div>
 
             {isMobileViewport ? (
               <div style={styles.deliveryPricingCardList}>
                 {deliveryPricingRows.map((row) => (
-                  <div key={`${row.postalCodes}-${row.area}`} style={styles.deliveryPricingCard}>
+                  <div key={`${row.id}-${row.label}`} style={styles.deliveryPricingCard}>
                     <div style={styles.deliveryPricingCardRow}>
-                      <span style={styles.deliveryPricingCardLabel}>Area</span>
-                      <span style={styles.deliveryPricingCardValue}>{row.area}</span>
+                      <span style={styles.deliveryPricingCardLabel}>Postal code(s)</span>
+                      <span style={styles.deliveryPricingCardValue}>{row.label}</span>
                     </div>
                     <div style={styles.deliveryPricingCardRow}>
-                      <span style={styles.deliveryPricingCardLabel}>Free from</span>
-                      <span style={styles.deliveryPricingCardValue}>₱ {formatMoney(row.freeFromPhp)}</span>
+                      <span style={styles.deliveryPricingCardLabel}>Price</span>
+                      <span style={styles.deliveryPricingCardValue}>₱ {formatMoney(row.pricePhp)}</span>
                     </div>
                     <div style={styles.deliveryPricingCardRow}>
-                      <span style={styles.deliveryPricingCardLabel}>Fee below min</span>
-                      <span style={styles.deliveryPricingCardValue}>₱ {formatMoney(row.feeBelowMinPhp)}</span>
-                    </div>
-                    <div style={styles.deliveryPricingCardRow}>
-                      <span style={styles.deliveryPricingCardLabel}>Postcode(s)</span>
-                      <span style={styles.deliveryPricingCardValue}>{row.postalCodes}</span>
+                      <span style={styles.deliveryPricingCardLabel}>Minimum Order for free delivery</span>
+                      <span style={styles.deliveryPricingCardValue}>
+                        {row.freeDeliveryMoqPhp > 0
+                          ? `₱ ${formatMoney(row.freeDeliveryMoqPhp)}`
+                          : "No MOQ"}
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -946,17 +971,19 @@ export default function ProductDrawer({
             ) : (
               <div style={styles.deliveryPricingTableWrap}>
                 <div style={styles.deliveryPricingTableHeaderRow}>
-                  <div style={styles.deliveryPricingHeaderCell}>AREA</div>
-                  <div style={styles.deliveryPricingHeaderCell}>FREE DELIVERY FROM</div>
-                  <div style={styles.deliveryPricingHeaderCell}>FEE BELOW MIN</div>
-                  <div style={styles.deliveryPricingHeaderCell}>POSTCODE(S)</div>
+                  <div style={styles.deliveryPricingHeaderCell}>POSTAL CODE(S)</div>
+                  <div style={styles.deliveryPricingHeaderCell}>PRICE</div>
+                  <div style={styles.deliveryPricingHeaderCell}>MINIMUM ORDER FOR FREE DELIVERY</div>
                 </div>
                 {deliveryPricingRows.map((row) => (
-                  <div key={`${row.postalCodes}-${row.area}`} style={styles.deliveryPricingBodyRow}>
-                    <div style={styles.deliveryPricingCell}>{row.area}</div>
-                    <div style={styles.deliveryPricingCell}>₱ {formatMoney(row.freeFromPhp)}</div>
-                    <div style={styles.deliveryPricingCell}>₱ {formatMoney(row.feeBelowMinPhp)}</div>
-                    <div style={styles.deliveryPricingCell}>{row.postalCodes}</div>
+                  <div key={`${row.id}-${row.label}`} style={styles.deliveryPricingBodyRow}>
+                    <div style={styles.deliveryPricingCell}>{row.label}</div>
+                    <div style={styles.deliveryPricingCell}>₱ {formatMoney(row.pricePhp)}</div>
+                    <div style={styles.deliveryPricingCell}>
+                      {row.freeDeliveryMoqPhp > 0
+                        ? `₱ ${formatMoney(row.freeDeliveryMoqPhp)}`
+                        : "No MOQ"}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1744,7 +1771,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   deliveryPricingTableHeaderRow: {
     display: "grid",
-    gridTemplateColumns: "1.4fr 1fr 1fr 1.2fr",
+    gridTemplateColumns: "1.6fr 1fr 1.2fr",
     background: "var(--tp-control-bg-soft)",
     borderBottom: "1px solid var(--tp-border-color-soft)",
   },
@@ -1757,7 +1784,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   deliveryPricingBodyRow: {
     display: "grid",
-    gridTemplateColumns: "1.4fr 1fr 1fr 1.2fr",
+    gridTemplateColumns: "1.6fr 1fr 1.2fr",
     borderBottom: "1px solid var(--tp-border-color-soft)",
   },
   deliveryPricingCell: {

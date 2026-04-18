@@ -15,6 +15,7 @@ import AuthModal from "@/components/AuthModal";
 import LoyaltyProgramsDrawer, {
   type LoyaltyProgramsDraft,
 } from "@/components/LoyaltyProgramsDrawer";
+import LogisticsDrawer from "@/components/LogisticsDrawer";
 import MyDetailsDrawer from "@/components/MyDetailsDrawer";
 import MyOrdersDrawer, { type MyOrderItem } from "@/components/MyOrdersDrawer";
 import MyReviewsDrawer from "@/components/MyReviewsDrawer";
@@ -389,6 +390,7 @@ export default function Page() {
   const [submittingCheckout, setSubmittingCheckout] = React.useState<boolean>(false);
   const [availableSteakCredits, setAvailableSteakCredits] = React.useState<number>(0);
   const [loyaltyProgramsOpen, setLoyaltyProgramsOpen] = React.useState<boolean>(false);
+  const [logisticsOpen, setLogisticsOpen] = React.useState<boolean>(false);
   const [adminAllProductsMode, setAdminAllProductsMode] = React.useState<boolean>(false);
   const [zoneStylesByMode, setZoneStylesByMode] = React.useState<
     Record<"dark" | "light", Record<ZoneName, ZoneStyleDraft>>
@@ -1681,6 +1683,7 @@ export default function Page() {
     setInventoryOpen(false);
     setAnalyticsOpen(false);
     setLoyaltyProgramsOpen(false);
+    setLogisticsOpen(false);
     setOrderDrawerSource(null);
     setSelectedOrderDetail(null);
     setSelectedCustomerId(null);
@@ -1712,6 +1715,7 @@ export default function Page() {
       inventoryOpen ||
       analyticsOpen ||
       loyaltyProgramsOpen ||
+      logisticsOpen ||
       !!orderDrawerSource ||
       loadingCustomerDetail ||
       !!selectedCustomerDetail ||
@@ -1725,6 +1729,7 @@ export default function Page() {
       detailsOpen,
       inventoryOpen,
       loyaltyProgramsOpen,
+      logisticsOpen,
       loadingCustomerDetail,
       loadingPurchaseDetail,
       allReviewsOpen,
@@ -2461,6 +2466,16 @@ React.useEffect(() => {
     setLoyaltyProgramsOpen(true);
     if (!opts?.skipNavigate) {
       pushAppRoute("/loyalty-programs");
+    }
+  }, [closePrimaryDrawers, isAdmin, pushAppRoute]);
+
+  const openLogisticsDrawer = React.useCallback((opts?: { skipNavigate?: boolean }) => {
+    if (!isAdmin) return;
+    closePrimaryDrawers();
+    setCartOpen(false);
+    setLogisticsOpen(true);
+    if (!opts?.skipNavigate) {
+      pushAppRoute("/logistics");
     }
   }, [closePrimaryDrawers, isAdmin, pushAppRoute]);
 
@@ -4114,6 +4129,7 @@ React.useEffect(() => {
     }
     if (inventoryOpen) return "/inventory";
     if (analyticsOpen) return "/analytics";
+    if (logisticsOpen) return "/logistics";
     if (allReviewsOpen) return "/reviews";
     if (allCustomersOpen) return "/customers";
     if (loyaltyProgramsOpen) return "/loyalty-programs";
@@ -4129,6 +4145,7 @@ React.useEffect(() => {
     analyticsOpen,
     allCustomersOpen,
     allReviewsOpen,
+    logisticsOpen,
     loyaltyProgramsOpen,
     allPurchasesOpen,
     allOrdersOpen,
@@ -4350,6 +4367,11 @@ React.useEffect(() => {
           openLoyaltyProgramsDrawer({ skipNavigate: true });
           return;
         }
+        if (path === "/logistics") {
+          if (!requireAdmin({ path, search })) return;
+          openLogisticsDrawer({ skipNavigate: true });
+          return;
+        }
         if (path === "/reviews") {
           if (!requireAdmin({ path, search })) return;
           openAllReviewsDrawer({ skipNavigate: true });
@@ -4398,6 +4420,7 @@ React.useEffect(() => {
       loadAndSelectCustomer,
       loadAndSelectPurchase,
       openAllCustomersDrawer,
+      openLogisticsDrawer,
       openLoyaltyProgramsDrawer,
       openAllPurchasesDrawer,
       openAllOrdersDrawer,
@@ -5238,9 +5261,9 @@ React.useEffect(() => {
       )
     );
     await refreshCart();
-    if (user?.id && (saveAddressToProfile || createAccountFromDetails || isOnBehalfCheckout)) {
+    if (user?.id && !isOnBehalfCheckout && (saveAddressToProfile || createAccountFromDetails)) {
       try {
-        const customerSyncEmail = isOnBehalfCheckout ? null : (customerEmail.trim() || user.email || null);
+        const customerSyncEmail = customerEmail.trim() || user.email || null;
         await syncProfileAndCustomer({
           profileId: user.id,
           email: customerSyncEmail,
@@ -5592,6 +5615,7 @@ React.useEffect(() => {
           onOpenAllPurchases={openAllPurchasesDrawer}
           onOpenAllProducts={openAllProductsView}
           onOpenLoyaltyPrograms={openLoyaltyProgramsDrawer}
+          onOpenLogistics={openLogisticsDrawer}
           onOpenInventory={openInventoryDrawer}
           onOpenAnalytics={openAnalyticsDrawer}
           onLogout={logout}
@@ -6062,6 +6086,16 @@ React.useEffect(() => {
         }}
         onBack={() => {
           setLoyaltyProgramsOpen(false);
+          goBackDrawer("/shop");
+        }}
+      />
+
+      <LogisticsDrawer
+        isOpen={logisticsOpen}
+        topOffset={topOffset}
+        backgroundStyle={mainZoneStyle}
+        onBack={() => {
+          setLogisticsOpen(false);
           goBackDrawer("/shop");
         }}
       />
