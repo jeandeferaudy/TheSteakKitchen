@@ -14,6 +14,13 @@ const DEFAULT_ADMIN_BCC = [
   "adriel.sanjuan1@gmail.com",
 ];
 
+function formatSender(name: string, address: string): string {
+  const trimmedName = name.trim();
+  const trimmedAddress = address.trim();
+  if (!trimmedName) return trimmedAddress;
+  return `${trimmedName} <${trimmedAddress}>`;
+}
+
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as SendOrderEmailPayload;
@@ -23,7 +30,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Missing order id." }, { status: 400 });
     }
 
-    const from = process.env.RESEND_FROM || "onboarding@resend.dev";
+    const fromName = process.env.ORDER_EMAIL_FROM_NAME || "The Steak Kitchen Orders";
+    const fromAddress = process.env.ORDER_EMAIL_FROM_ADDRESS || process.env.RESEND_FROM || "onboarding@resend.dev";
+    const replyTo = process.env.ORDER_EMAIL_REPLY_TO || fromAddress;
+    const supportPhone = String(process.env.ORDER_EMAIL_PHONE ?? "").trim();
+    const from = formatSender(fromName, fromAddress);
     const adminBccEnv = String(process.env.ADMIN_BCC_EMAILS ?? "")
       .split(",")
       .map((v) => v.trim())
@@ -40,10 +51,12 @@ export async function POST(req: Request) {
           reason: "Missing RESEND_API_KEY.",
           debug: {
             from,
+            replyTo,
             recipientMode: email ? "customer+bcc" : "admin-only",
             toCount: recipients.length,
             bccCount: bccRecipients.length,
             orderId,
+            supportPhone: supportPhone || null,
           },
         },
         { status: 200 }
@@ -58,6 +71,7 @@ export async function POST(req: Request) {
     const displayName = String(body.name ?? "").trim() || "there";
     const debug = {
       from,
+      replyTo,
       recipientMode: email ? "customer+bcc" : "admin-only",
       to: recipients,
       bcc: bccRecipients,
@@ -65,6 +79,7 @@ export async function POST(req: Request) {
       orderNumber: orderNumber || null,
       orderUrl,
       origin,
+      supportPhone: supportPhone || null,
     };
 
     const html = `
@@ -75,7 +90,8 @@ export async function POST(req: Request) {
         <p>You can view your order summary anytime using this link:</p>
         <p><a href="${orderUrl}">${orderUrl}</a></p>
         <p>If you have any questions, reply to this email and our team will help you.</p>
-        <p>— The Steak Kitchen</p>
+        ${supportPhone ? `<p>Phone: ${supportPhone}</p>` : ""}
+        <p>Team TheSteakKitchen</p>
       </div>
     `;
 
@@ -87,6 +103,7 @@ export async function POST(req: Request) {
       },
       body: JSON.stringify({
         from,
+        reply_to: replyTo,
         to: recipients,
         ...(bccRecipients.length ? { bcc: bccRecipients } : null),
         subject: `${orderLabel} has been placed`,
