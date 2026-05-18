@@ -1912,6 +1912,15 @@ export default function CheckoutDrawer({
                     onChange={(e) =>
                       setCustomer({ ...customer, full_name: e.target.value })
                     }
+                    onBlur={() => {
+                      const fullName = customer.full_name.trim();
+                      const attentionTo = customer.attention_to.trim();
+                      if (!fullName || attentionTo) return;
+                      setCustomer({
+                        ...customer,
+                        attention_to: fullName,
+                      });
+                    }}
                     placeholder="e.g. Juan Dela Cruz"
                     autoComplete="name"
                   />
