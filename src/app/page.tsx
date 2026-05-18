@@ -114,6 +114,26 @@ import {
 import { fetchAdminReviews, fetchMyReviewQueue } from "@/lib/reviewsApi";
 import type { CheckoutSubmitPayload, CustomerDraft } from "@/types/checkout";
 
+type OrderPlacedModalState = {
+  orderId: string;
+  orderNumber: string;
+  emailSent: boolean;
+  emailIssue?: string | null;
+  summaryReady: boolean;
+  summaryTimedOut: boolean;
+  isPublic: boolean;
+};
+
+type SendOrderEmailResponseBody = {
+  ok?: boolean;
+  skipped?: boolean;
+  reason?: string;
+  error?: string;
+  details?: unknown;
+  resendStatus?: number;
+  debug?: Record<string, unknown>;
+};
+
 type Panel = null | "product" | "checkout" | "edit";
 type ZoneName = "header" | "navbar" | "main";
 type FilterKey = "status" | "type" | "cut" | "country" | "preparation" | "temperature";
@@ -528,14 +548,7 @@ export default function Page() {
   });
   const [paymentFile, setPaymentFile] = React.useState<File | null>(null);
   const [checkoutOpening, setCheckoutOpening] = React.useState<boolean>(false);
-  const [orderPlacedModal, setOrderPlacedModal] = React.useState<{
-    orderId: string;
-    orderNumber: string;
-    emailSent: boolean;
-    summaryReady: boolean;
-    summaryTimedOut: boolean;
-    isPublic: boolean;
-  } | null>(null);
+  const [orderPlacedModal, setOrderPlacedModal] = React.useState<OrderPlacedModalState | null>(null);
   const [orderNotice, setOrderNotice] = React.useState<string>("");
   const resolvedGridView: "list" | "4" | "5" = gridView;
   const mobileLogoHeight = Math.round(136 * 0.805);
@@ -5227,6 +5240,7 @@ React.useEffect(() => {
     }
 
     let emailSent = false;
+    let emailIssue: string | null = null;
     if (orderId) {
       try {
         const origin =
@@ -5243,13 +5257,42 @@ React.useEffect(() => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(emailPayload),
         });
-        if (!response.ok) {
-          const details = await response.text();
-          console.warn("[checkout] email failed:", details);
+        const responseText = await response.text();
+        let responseBody: SendOrderEmailResponseBody | null = null;
+        if (responseText) {
+          try {
+            responseBody = JSON.parse(responseText) as SendOrderEmailResponseBody;
+          } catch {
+            responseBody = null;
+          }
+        }
+        const debugText = responseBody?.debug ? JSON.stringify(responseBody.debug) : "";
+        if (!response.ok || responseBody?.skipped) {
+          const reason =
+            responseBody?.reason ||
+            responseBody?.error ||
+            (response.ok ? "Email send was skipped." : "Email send failed.");
+          const details =
+            responseBody?.details != null
+              ? typeof responseBody.details === "string"
+                ? responseBody.details
+                : JSON.stringify(responseBody.details)
+              : !responseBody && responseText
+                ? responseText
+                : "";
+          emailIssue = [reason, details ? `Details: ${details}` : "", debugText ? `Debug: ${debugText}` : ""]
+            .filter(Boolean)
+            .join(" | ");
+          console.warn("[checkout] email failed:", {
+            status: response.status,
+            body: responseBody ?? responseText,
+          });
         } else {
           emailSent = true;
+          console.info("[checkout] order email sent:", responseBody?.debug ?? {});
         }
       } catch (err) {
+        emailIssue = err instanceof Error ? err.message : "Unknown email error.";
         console.warn("[checkout] email error:", err);
       }
     }
@@ -5287,6 +5330,7 @@ React.useEffect(() => {
         orderId,
         orderNumber: resolvedOrderNumber || orderId.slice(0, 8).toUpperCase(),
         emailSent,
+        emailIssue,
         summaryReady: true,
         summaryTimedOut: false,
         isPublic: !user?.id,
@@ -6272,6 +6316,9 @@ React.useEffect(() => {
                       ? "Use the OK button below to open your order summary and track its status."
                       : "Use the OK button below to open your order summary."}
                 </div>
+                {!orderPlacedModal.emailSent && orderPlacedModal.emailIssue ? (
+                  <div style={styles.orderPlacedDebugText}>Email debug: {orderPlacedModal.emailIssue}</div>
+                ) : null}
                 {orderPlacedModal.summaryReady || orderPlacedModal.summaryTimedOut ? (
                   <button
                     type="button"
@@ -6865,6 +6912,19 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 15,
     opacity: 0.92,
     lineHeight: 1.35,
+  },
+  orderPlacedDebugText: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 1.5,
+    color: "#7c2d12",
+    background: "#fff7ed",
+    border: "1px solid #fdba74",
+    borderRadius: 12,
+    padding: "10px 12px",
+    textAlign: "left",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
   },
   orderPlacedOkBtn: {
     width: 92,

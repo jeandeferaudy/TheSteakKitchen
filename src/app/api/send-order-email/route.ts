@@ -24,9 +24,30 @@ export async function POST(req: Request) {
     }
 
     const from = process.env.RESEND_FROM || "onboarding@resend.dev";
+    const adminBccEnv = String(process.env.ADMIN_BCC_EMAILS ?? "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const adminBcc = adminBccEnv.length ? adminBccEnv : DEFAULT_ADMIN_BCC;
+    const recipients = email ? [email] : adminBcc;
+    const bccRecipients = email ? adminBcc : [];
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
-      return NextResponse.json({ ok: true, skipped: true, reason: "Missing RESEND_API_KEY." });
+      return NextResponse.json(
+        {
+          ok: true,
+          skipped: true,
+          reason: "Missing RESEND_API_KEY.",
+          debug: {
+            from,
+            recipientMode: email ? "customer+bcc" : "admin-only",
+            toCount: recipients.length,
+            bccCount: bccRecipients.length,
+            orderId,
+          },
+        },
+        { status: 200 }
+      );
     }
 
     const origin =
@@ -35,13 +56,16 @@ export async function POST(req: Request) {
     const orderLabel = orderNumber ? `Order ${orderNumber}` : "Your order";
     const orderUrl = `${origin.replace(/\/$/, "")}/order?id=${encodeURIComponent(orderId)}`;
     const displayName = String(body.name ?? "").trim() || "there";
-    const adminBccEnv = String(process.env.ADMIN_BCC_EMAILS ?? "")
-      .split(",")
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const adminBcc = adminBccEnv.length ? adminBccEnv : DEFAULT_ADMIN_BCC;
-    const recipients = email ? [email] : adminBcc;
-    const bccRecipients = email ? adminBcc : [];
+    const debug = {
+      from,
+      recipientMode: email ? "customer+bcc" : "admin-only",
+      to: recipients,
+      bcc: bccRecipients,
+      orderId,
+      orderNumber: orderNumber || null,
+      orderUrl,
+      origin,
+    };
 
     const html = `
       <div style="font-family: Arial, sans-serif; color: #111;">
@@ -73,15 +97,24 @@ export async function POST(req: Request) {
     if (!resendResponse.ok) {
       const errText = await resendResponse.text();
       return NextResponse.json(
-        { ok: false, error: "Resend request failed.", details: errText },
+        {
+          ok: false,
+          error: "Resend request failed.",
+          details: errText,
+          resendStatus: resendResponse.status,
+          debug,
+        },
         { status: 502 }
       );
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, debug });
   } catch (err) {
     return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : "Unknown error." },
+      {
+        ok: false,
+        error: err instanceof Error ? err.message : "Unknown error.",
+      },
       { status: 500 }
     );
   }
