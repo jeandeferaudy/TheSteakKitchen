@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     }
 
     const fromName = process.env.ORDER_EMAIL_FROM_NAME || "The Steak Kitchen Orders";
-    const fromAddress = process.env.ORDER_EMAIL_FROM_ADDRESS || process.env.RESEND_FROM || "onboarding@resend.dev";
+    const fromAddress = process.env.ORDER_EMAIL_FROM_ADDRESS || "noreply@thesteakkitchenph.com";
     const replyTo = process.env.ORDER_EMAIL_REPLY_TO || fromAddress;
     const supportPhone = String(process.env.ORDER_EMAIL_PHONE ?? "").trim();
     const from = formatSender(fromName, fromAddress);
